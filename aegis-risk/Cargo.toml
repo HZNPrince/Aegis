@@ -1,0 +1,11 @@
+[package]
+name = "aegis-risk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aegis-core = { path = "../aegis-core" }
+serde = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }

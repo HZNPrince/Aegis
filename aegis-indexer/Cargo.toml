@@ -1,0 +1,15 @@
+[package]
+name = "aegis-indexer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aegis-core = { path = "../aegis-core" }
+tokio = { workspace = true }
+yellowstone-grpc-client = { workspace = true }
+yellowstone-grpc-proto = { workspace = true }
+solana-sdk = { workspace = true }
+solana-client = { workspace = true }
+solana-account-decoder = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

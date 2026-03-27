@@ -1,0 +1,14 @@
+[package]
+name = "aegis-alerts"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aegis-core = { path = "../aegis-core" }
+aegis-risk = { path = "../aegis-risk" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

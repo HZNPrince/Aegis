@@ -1,0 +1,15 @@
+[package]
+name = "aegis-bot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aegis-core = { path = "../aegis-core" }
+aegis-risk = { path = "../aegis-risk" }
+aegis-alerts = { path = "../aegis-alerts" }
+teloxide = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenv = { workspace = true }
