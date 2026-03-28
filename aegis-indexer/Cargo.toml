@@ -3,9 +3,15 @@ name = "aegis-indexer"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "test-stream"
+path = "src/bin/test_stream.rs"
+
 [dependencies]
 aegis-core = { path = "../aegis-core" }
 tokio = { workspace = true }
+futures = { workspace = true}
+tonic = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 solana-sdk = { workspace = true }
@@ -13,3 +19,6 @@ solana-client = { workspace = true }
 solana-account-decoder = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+klend-sdk = { workspace = true }
+borsh = { workspace = true }
