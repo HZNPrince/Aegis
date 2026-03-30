@@ -3,6 +3,8 @@ use std::{
     io::{Write, stdout},
 };
 
+use borsh::BorshDeserialize;
+use carbon_marginfi_v2_decoder::accounts::marginfi_account::MarginfiAccount;
 use futures::StreamExt;
 use klend_sdk::accounts::{Obligation, Reserve};
 use solana_sdk::bs58;
@@ -155,6 +157,27 @@ fn process_update(update: &SubscribeUpdate, count: u64) {
                             let _ = std::io::stdout().flush();
                         }
                         _ => {}
+                    }
+                };
+                if owner == MARGINFI_V2_PROGRAM_ID {
+                    if data_len == 2312 {
+                        if let Ok(marginfi) =
+                            MarginfiAccount::deserialize(&mut &account_info.data[8..])
+                        {
+                            let mut active_balances = 0;
+                            for balance in marginfi.lending_account.balances {
+                                if balance.active {
+                                    active_balances += 1;
+                                }
+                            }
+
+                            if active_balances > 0 {
+                                info!(
+                                    "Marginfi #{}: account={} active balance={}",
+                                    count, pubkey, active_balances
+                                );
+                            }
+                        }
                     }
                 }
             }

@@ -23,3 +23,4 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 klend-sdk = { workspace = true }
 borsh = { workspace = true }
+carbon-marginfi-v2-decoder = { workspace = true }

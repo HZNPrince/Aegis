@@ -35,3 +35,4 @@ uuid = { version = "1.23.0", features = ["v4", "serde"] }
 borsh = "1.6.1"
 
 klend-sdk = "0.1.2"
+carbon-marginfi-v2-decoder = "0.12.0"
