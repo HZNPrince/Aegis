@@ -1,6 +1,10 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    io::{Write, stdout},
+};
 
 use futures::StreamExt;
+use klend_sdk::accounts::{Obligation, Reserve};
 use solana_sdk::bs58;
 use tonic::transport::ClientTlsConfig;
 use tracing::{error, info, warn};
@@ -99,10 +103,60 @@ fn process_update(update: &SubscribeUpdate, count: u64) {
                 let data_len = account_info.data.len();
                 let slot = account_update.slot;
 
-                info!(
-                    "Update #{}: account={} owner={} data_len={} slot={}",
-                    count, &pubkey, &owner, data_len, slot
-                );
+                if owner == KAMINO_PROGRAM_ID {
+                    match data_len {
+                        Obligation::LEN => {
+                            if let Ok(obligation) = Obligation::from_bytes(&account_info.data) {
+                                info!(
+                                    "Obligation #{}: owner={} collateral_usd={} debt_usd={}",
+                                    count,
+                                    bs58::encode(&obligation.owner).into_string(),
+                                    obligation.deposited_value_sf / 1_000_000_000_000_000_000,
+                                    obligation.borrow_factor_adjusted_debt_value_sf
+                                        / 1_000_000_000_000_000_000
+                                )
+                            } else {
+                                warn!("Failed to parse Obligation at {}", pubkey);
+                            }
+                        }
+                        Reserve::LEN => {
+                            if let Ok(_reserve) = Reserve::from_bytes(&account_info.data) {
+                                print!(".\n");
+                                let _ = stdout().flush();
+                            }
+                        }
+                        _ => {}
+                    }
+                };
+                if owner == SAVE_PROGRAM_ID {
+                    match data_len {
+                        1300 => {
+                            let data = &account_info.data;
+
+                            let ob_owner = bs58::encode(&data[42..74]).into_string();
+                            let mut dep_bytes = [0u8; 16];
+                            dep_bytes.copy_from_slice(&data[74..90]);
+                            let deposited_value_sf = u128::from_le_bytes(dep_bytes);
+
+                            let mut bor_bytes = [0u8; 16];
+                            bor_bytes.copy_from_slice(&data[90..106]);
+                            let borrowed_value_sf = u128::from_le_bytes(bor_bytes);
+
+                            info!(
+                                " SAVE Obligation #{}: owner={} collateral_usd={} dept_usd={}",
+                                count,
+                                ob_owner,
+                                deposited_value_sf / 1_000_000_000_000_000_000,
+                                borrowed_value_sf / 1_000_000_000_000_000_000
+                            );
+                        }
+                        619 => {
+                            print!("**\n");
+                            let _ = std::io::stdout().flush();
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         Some(UpdateOneof::Ping(_)) => {}

@@ -12,6 +12,7 @@ aegis-core = { path = "../aegis-core" }
 tokio = { workspace = true }
 futures = { workspace = true}
 tonic = { workspace = true }
+rustls = { workspace = true }
 yellowstone-grpc-client = { workspace = true }
 yellowstone-grpc-proto = { workspace = true }
 solana-sdk = { workspace = true }
