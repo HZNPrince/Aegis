@@ -3,17 +3,18 @@ use std::{
     io::{Write, stdout},
 };
 
-use borsh::BorshDeserialize;
-use carbon_marginfi_v2_decoder::accounts::marginfi_account::MarginfiAccount;
 use futures::StreamExt;
-use klend_sdk::accounts::{Obligation, Reserve};
-use solana_sdk::bs58;
+use solana_sdk::{bs58, hash::Hash};
 use tonic::transport::ClientTlsConfig;
 use tracing::{error, info, warn};
 use yellowstone_grpc_client::GeyserGrpcClient;
 use yellowstone_grpc_proto::geyser::{
     CommitmentLevel, SubscribeRequest, SubscribeRequestFilterAccounts, SubscribeUpdate,
     subscribe_update::UpdateOneof,
+};
+
+use crate::parsers::{
+    ProtocolParser, kamino::KaminoParser, marginfi::MarginfiParser, save::SaveParser,
 };
 
 /// Known lending protocol program IDs on mainnet.
@@ -79,11 +80,16 @@ pub async fn start_account_stream(grpc_endpoint: &str) -> anyhow::Result<()> {
 
     let mut update_count: u64 = 0;
 
+    let mut parser_map: HashMap<&str, Box<dyn ProtocolParser>> = HashMap::new();
+    parser_map.insert(KAMINO_PROGRAM_ID, Box::new(KaminoParser));
+    parser_map.insert(SAVE_PROGRAM_ID, Box::new(SaveParser));
+    parser_map.insert(MARGINFI_V2_PROGRAM_ID, Box::new(MarginfiParser));
+
     while let Some(message) = stream.next().await {
         match message {
             Ok(update) => {
                 update_count += 1;
-                process_update(&update, update_count);
+                process_update(&update, update_count, &parser_map);
             }
             Err(e) => {
                 error!("Stream error: {:?}", e);
@@ -96,88 +102,24 @@ pub async fn start_account_stream(grpc_endpoint: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn process_update(update: &SubscribeUpdate, count: u64) {
+fn process_update(
+    update: &SubscribeUpdate,
+    count: u64,
+    parsers: &HashMap<&str, Box<dyn ProtocolParser>>,
+) {
     match &update.update_oneof {
         Some(UpdateOneof::Account(account_update)) => {
             if let Some(account_info) = &account_update.account {
                 let pubkey = bs58::encode(&account_info.pubkey).into_string();
                 let owner = bs58::encode(&account_info.owner).into_string();
-                let data_len = account_info.data.len();
                 let slot = account_update.slot;
 
-                if owner == KAMINO_PROGRAM_ID {
-                    match data_len {
-                        Obligation::LEN => {
-                            if let Ok(obligation) = Obligation::from_bytes(&account_info.data) {
-                                info!(
-                                    "Obligation #{}: owner={} collateral_usd={} debt_usd={}",
-                                    count,
-                                    bs58::encode(&obligation.owner).into_string(),
-                                    obligation.deposited_value_sf / 1_000_000_000_000_000_000,
-                                    obligation.borrow_factor_adjusted_debt_value_sf
-                                        / 1_000_000_000_000_000_000
-                                )
-                            } else {
-                                warn!("Failed to parse Obligation at {}", pubkey);
-                            }
-                        }
-                        Reserve::LEN => {
-                            if let Ok(_reserve) = Reserve::from_bytes(&account_info.data) {
-                                print!(".\n");
-                                let _ = stdout().flush();
-                            }
-                        }
-                        _ => {}
-                    }
-                };
-                if owner == SAVE_PROGRAM_ID {
-                    match data_len {
-                        1300 => {
-                            let data = &account_info.data;
-
-                            let ob_owner = bs58::encode(&data[42..74]).into_string();
-                            let mut dep_bytes = [0u8; 16];
-                            dep_bytes.copy_from_slice(&data[74..90]);
-                            let deposited_value_sf = u128::from_le_bytes(dep_bytes);
-
-                            let mut bor_bytes = [0u8; 16];
-                            bor_bytes.copy_from_slice(&data[90..106]);
-                            let borrowed_value_sf = u128::from_le_bytes(bor_bytes);
-
-                            info!(
-                                " SAVE Obligation #{}: owner={} collateral_usd={} dept_usd={}",
-                                count,
-                                ob_owner,
-                                deposited_value_sf / 1_000_000_000_000_000_000,
-                                borrowed_value_sf / 1_000_000_000_000_000_000
-                            );
-                        }
-                        619 => {
-                            print!("**\n");
-                            let _ = std::io::stdout().flush();
-                        }
-                        _ => {}
-                    }
-                };
-                if owner == MARGINFI_V2_PROGRAM_ID {
-                    if data_len == 2312 {
-                        if let Ok(marginfi) =
-                            MarginfiAccount::deserialize(&mut &account_info.data[8..])
-                        {
-                            let mut active_balances = 0;
-                            for balance in marginfi.lending_account.balances {
-                                if balance.active {
-                                    active_balances += 1;
-                                }
-                            }
-
-                            if active_balances > 0 {
-                                info!(
-                                    "Marginfi #{}: account={} active balance={}",
-                                    count, pubkey, active_balances
-                                );
-                            }
-                        }
+                if let Some(parser) = parsers.get(owner.as_str()) {
+                    if let Some(pos) = parser.try_parse(&pubkey, &account_info.data, slot) {
+                        info!(
+                            "{} #{}: owner={} collateral_usd={:.2} debt_usd={:.2}",
+                            pos.protocol, count, pos.owner, pos.collateral_usd, pos.debt_usd
+                        );
                     }
                 }
             }

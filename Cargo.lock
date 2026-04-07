@@ -97,6 +97,7 @@ dependencies = [
  "anyhow",
  "borsh 1.6.1",
  "carbon-marginfi-v2-decoder",
+ "dashmap 6.1.0",
  "futures",
  "klend-sdk",
  "rustls",
@@ -1209,6 +1210,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "data-encoding"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1821,7 +1836,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68a7f542ee6b35af73b06abc0dad1c1bae89964e4e253bc4b587b91c9637867b"
 dependencies = [
  "cfg-if",
- "dashmap",
+ "dashmap 5.5.3",
  "futures",
  "futures-timer",
  "no-std-compat",
@@ -4494,7 +4509,7 @@ dependencies = [
  "anza-quinn",
  "async-trait",
  "bincode",
- "dashmap",
+ "dashmap 5.5.3",
  "futures",
  "futures-util",
  "indexmap 2.13.0",
@@ -5339,7 +5354,7 @@ dependencies = [
  "bincode",
  "bytes",
  "cfg-if",
- "dashmap",
+ "dashmap 5.5.3",
  "itertools 0.12.1",
  "log",
  "nix",
@@ -6408,7 +6423,7 @@ dependencies = [
  "arc-swap",
  "bytes",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.5.3",
  "futures",
  "futures-util",
  "governor",
