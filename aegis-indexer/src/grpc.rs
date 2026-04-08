@@ -1,10 +1,12 @@
 use std::{
     collections::HashMap,
     io::{Write, stdout},
+    sync::Arc,
 };
 
 use futures::StreamExt;
 use solana_sdk::{bs58, hash::Hash};
+use tokio::sync::mpsc;
 use tonic::transport::ClientTlsConfig;
 use tracing::{error, info, warn};
 use yellowstone_grpc_client::GeyserGrpcClient;
@@ -13,8 +15,12 @@ use yellowstone_grpc_proto::geyser::{
     subscribe_update::UpdateOneof,
 };
 
-use crate::parsers::{
-    ProtocolParser, kamino::KaminoParser, marginfi::MarginfiParser, save::SaveParser,
+use crate::{
+    parsers::{
+        PositionUpdate, ProtocolParser, kamino::KaminoParser, marginfi::MarginfiParser,
+        save::SaveParser,
+    },
+    state::AppState,
 };
 
 /// Known lending protocol program IDs on mainnet.
@@ -22,8 +28,14 @@ pub const KAMINO_PROGRAM_ID: &str = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD
 pub const SAVE_PROGRAM_ID: &str = "So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo";
 pub const MARGINFI_V2_PROGRAM_ID: &str = "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA";
 
-pub async fn start_account_stream(grpc_endpoint: &str) -> anyhow::Result<()> {
+pub async fn start_account_stream(grpc_endpoint: &str, state: Arc<AppState>) -> anyhow::Result<()> {
     info!("Connecting to Yellowstone gRPC at {}", grpc_endpoint);
+
+    // Bounded Channel for Backpressure
+    let (tx, mut rx) = mpsc::channel::<PositionUpdate>(1_000);
+
+    // Spawn background dababase writer
+    tokio::spawn(run_db_writer(rx, state.clone()));
 
     let mut client = GeyserGrpcClient::build_from_shared(grpc_endpoint.to_string())?
         .x_token::<String>(None)?
@@ -89,7 +101,7 @@ pub async fn start_account_stream(grpc_endpoint: &str) -> anyhow::Result<()> {
         match message {
             Ok(update) => {
                 update_count += 1;
-                process_update(&update, update_count, &parser_map);
+                process_update(&update, update_count, &parser_map, &tx, &state);
             }
             Err(e) => {
                 error!("Stream error: {:?}", e);
@@ -106,6 +118,8 @@ fn process_update(
     update: &SubscribeUpdate,
     count: u64,
     parsers: &HashMap<&str, Box<dyn ProtocolParser>>,
+    tx: &mpsc::Sender<PositionUpdate>,
+    state: &Arc<AppState>,
 ) {
     match &update.update_oneof {
         Some(UpdateOneof::Account(account_update)) => {
@@ -120,11 +134,43 @@ fn process_update(
                             "{} #{}: owner={} collateral_usd={:.2} debt_usd={:.2}",
                             pos.protocol, count, pos.owner, pos.collateral_usd, pos.debt_usd
                         );
+                        if state.monitored_wallets.contains_key(&pos.owner) {
+                            // Cache in memory for instant API lookups
+                            state.positions.insert(pos.pubkey.clone(), pos.clone());
+
+                            if let Err(e) = tx.try_send(pos) {
+                                tracing::warn!("Channel full ! Dropping update: {}", e);
+                            }
+                        }
                     }
                 }
             }
         }
         Some(UpdateOneof::Ping(_)) => {}
         _ => {}
+    }
+}
+
+async fn run_db_writer(mut rx: mpsc::Receiver<PositionUpdate>, state: Arc<AppState>) {
+    tracing::info!("Database writer spawned!");
+
+    while let Some(pos) = rx.recv().await {
+        let _ = sqlx::query!(
+            "INSERT INTO wallets (pubkey) VALUES ($1) ON CONFLICT (pubkey) DO NOTHING",
+            pos.owner
+        )
+        .execute(&state.db_pool)
+        .await;
+
+        let _ = sqlx::query!(
+            "INSERT INTO positions (wallet_pubkey, obligation_pubkey, protocol, collateral_usd, debt_usd, last_slot)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (obligation_pubkey) 
+             DO UPDATE SET collateral_usd = $4, debt_usd = $5, last_slot = $6, updated_at = NOW()
+             WHERE positions.last_slot < $6",
+            pos.owner, pos.pubkey, pos.protocol, pos.collateral_usd, pos.debt_usd, pos.slot as i64
+        )
+        .execute(&state.db_pool)
+        .await;
     }
 }

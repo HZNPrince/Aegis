@@ -1,0 +1,4 @@
+-- Add migration script here
+ALTER TABLE positions
+ALTER COLUMN collateral_usd TYPE DOUBLE PRECISION USING collateral_usd::DOUBLE PRECISION,
+ALTER COLUMN debt_usd TYPE DOUBLE PRECISION USING debt_usd::DOUBLE PRECISION;

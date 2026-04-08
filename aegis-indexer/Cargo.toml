@@ -25,3 +25,5 @@ klend-sdk = { workspace = true }
 borsh = { workspace = true }
 carbon-marginfi-v2-decoder = { workspace = true }
 dashmap = { workspace = true }
+sqlx = { workspace = true }
+dotenv = { workspace = true }
