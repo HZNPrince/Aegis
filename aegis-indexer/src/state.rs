@@ -13,6 +13,10 @@ pub struct AppState {
     pub monitored_wallets: DashMap<String, bool>,
     /// Thread-safe counter
     pub update_count: AtomicU64,
+    /// Massive real-time cache of Token Prices (Mint -> USD Price)
+    pub token_prices: DashMap<String, f64>,
+    /// Maps a Bank/Reserve pubkey to its underlying Token Mint
+    pub token_mints: DashMap<String, String>,
     /// Postgres database connection pool
     pub db_pool: PgPool,
 }
@@ -23,6 +27,8 @@ impl AppState {
             positions: DashMap::new(),
             monitored_wallets: DashMap::new(),
             update_count: AtomicU64::new(0),
+            token_prices: DashMap::new(),
+            token_mints: DashMap::new(),
             db_pool,
         }
     }

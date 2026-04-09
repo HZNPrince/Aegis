@@ -27,3 +27,6 @@ carbon-marginfi-v2-decoder = { workspace = true }
 dashmap = { workspace = true }
 sqlx = { workspace = true }
 dotenv = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }

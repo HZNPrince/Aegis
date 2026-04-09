@@ -28,7 +28,10 @@ pub const KAMINO_PROGRAM_ID: &str = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD
 pub const SAVE_PROGRAM_ID: &str = "So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo";
 pub const MARGINFI_V2_PROGRAM_ID: &str = "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA";
 
-pub async fn start_account_stream(grpc_endpoint: &str, state: Arc<AppState>) -> anyhow::Result<()> {
+pub async fn start_account_stream(
+    grpc_endpoint: &str,
+    state: Arc<AppState>,
+) -> anyhow::Result<()> {
     info!("Connecting to Yellowstone gRPC at {}", grpc_endpoint);
 
     // Bounded Channel for Backpressure
@@ -101,7 +104,13 @@ pub async fn start_account_stream(grpc_endpoint: &str, state: Arc<AppState>) -> 
         match message {
             Ok(update) => {
                 update_count += 1;
-                process_update(&update, update_count, &parser_map, &tx, &state);
+                process_update(
+                    &update,
+                    update_count,
+                    &parser_map,
+                    &tx,
+                    &state,
+                );
             }
             Err(e) => {
                 error!("Stream error: {:?}", e);
@@ -125,8 +134,8 @@ fn process_update(
         Some(UpdateOneof::Account(account_update)) => {
             if let Some(account_info) = &account_update.account {
                 let pubkey = bs58::encode(&account_info.pubkey).into_string();
-                let owner = bs58::encode(&account_info.owner).into_string();
                 let slot = account_update.slot;
+                let owner: String = bs58::encode(&account_info.owner).into_string();
 
                 if let Some(parser) = parsers.get(owner.as_str()) {
                     if let Some(pos) = parser.try_parse(&pubkey, &account_info.data, slot) {

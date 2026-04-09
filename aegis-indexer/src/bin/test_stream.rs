@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use aegis_indexer::state::AppState;
+use dotenv::var;
 use sqlx::PgPool;
 use tracing_subscriber::EnvFilter;
 
@@ -27,12 +28,20 @@ async fn main() -> anyhow::Result<()> {
 
     // Connect to postgres
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env");
+    let rpc_url = std::env::var("RPC_ENDPOINT").expect("RPC_ENDPOINT must be set in .env");
 
     tracing::info!("Connecting to Postgres...");
     let pool = PgPool::connect(&db_url).await?;
 
     // Initialize the AppState
     let state = Arc::new(AppState::new(pool));
+
+    // Boot the Oracle Engine
+    let token_mints = aegis_indexer::oracle::discover_mints(&rpc_url, &state).await?;
+    tokio::spawn(aegis_indexer::oracle::start_jupiter_poller(
+        state.clone(),
+        token_mints,
+    ));
 
     let dummy_user = "YubozzSnKomEnH3pkmYsdatUUwUTcm7s4mHJVmefEWj";
     state.monitored_wallets.insert(dummy_user.to_string(), true);
