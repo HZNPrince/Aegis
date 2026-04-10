@@ -1,3 +1,8 @@
+//! Kamino (KLend) parser.
+//!
+//! Kamino Obligations store pre-computed USD values on-chain using 2^60 fixed-point scaling.
+//! We just read and descale them — no external price lookups needed.
+
 use klend_sdk::accounts::{Obligation, Reserve};
 use solana_sdk::bs58;
 
@@ -6,10 +11,11 @@ use crate::{
     parsers::{PositionUpdate, ProtocolParser},
 };
 
-/// Kamino uses 2^60 fixed-point scaling for USD values (FRACTION_ONE_SCALED)
+/// Kamino uses 2^60 fixed-point scaling for all USD values (FRACTION_ONE_SCALED).
 const FRACTION_ONE_SCALED: u128 = 1u128 << 60;
 
 pub struct KaminoParser;
+
 impl ProtocolParser for KaminoParser {
     fn program_id(&self) -> &str {
         KAMINO_PROGRAM_ID
@@ -17,6 +23,7 @@ impl ProtocolParser for KaminoParser {
 
     fn try_parse(&self, pubkey: &str, data: &[u8], slot: u64) -> Option<PositionUpdate> {
         match data.len() {
+            // Obligation = user position. Contains deposited/borrowed USD values.
             Obligation::LEN => {
                 let obligation = Obligation::from_bytes(data).ok()?;
                 let collateral = obligation.deposited_value_sf / FRACTION_ONE_SCALED;
@@ -35,7 +42,8 @@ impl ProtocolParser for KaminoParser {
                     slot,
                 })
             }
-            Reserve::LEN => None, // Todo
+            // Reserve = lending pool config. Not a user position.
+            Reserve::LEN => None,
             _ => None,
         }
     }

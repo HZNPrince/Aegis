@@ -1,11 +1,12 @@
-use std::{
-    collections::HashMap,
-    io::{Write, stdout},
-    sync::Arc,
-};
+//! gRPC stream — subscribes to all lending protocol account updates via Yellowstone
+//! and dispatches them to protocol-specific parsers.
+//!
+//! Flow: gRPC stream → parser dispatch → DashMap cache → mpsc channel → DB writer
 
-use futures::StreamExt;
-use solana_sdk::{bs58, hash::Hash};
+use std::{collections::HashMap, sync::Arc};
+
+use futures::{SinkExt, StreamExt};
+use solana_sdk::bs58;
 use tokio::sync::mpsc;
 use tonic::transport::ClientTlsConfig;
 use tracing::{error, info, warn};
@@ -23,21 +24,17 @@ use crate::{
     state::AppState,
 };
 
-/// Known lending protocol program IDs on mainnet.
+// Mainnet program IDs for the three lending protocols we index.
 pub const KAMINO_PROGRAM_ID: &str = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD";
 pub const SAVE_PROGRAM_ID: &str = "So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo";
 pub const MARGINFI_V2_PROGRAM_ID: &str = "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA";
 
-pub async fn start_account_stream(
-    grpc_endpoint: &str,
-    state: Arc<AppState>,
-) -> anyhow::Result<()> {
+/// Connects to Yellowstone gRPC, subscribes to all three lending protocol accounts,
+/// and processes updates in a loop until the stream ends.
+pub async fn start_account_stream(grpc_endpoint: &str, state: Arc<AppState>) -> anyhow::Result<()> {
     info!("Connecting to Yellowstone gRPC at {}", grpc_endpoint);
 
-    // Bounded Channel for Backpressure
-    let (tx, mut rx) = mpsc::channel::<PositionUpdate>(1_000);
-
-    // Spawn background dababase writer
+    let (tx, rx) = mpsc::channel::<PositionUpdate>(1_000);
     tokio::spawn(run_db_writer(rx, state.clone()));
 
     let mut client = GeyserGrpcClient::build_from_shared(grpc_endpoint.to_string())?
@@ -47,11 +44,13 @@ pub async fn start_account_stream(
         .tls_config(ClientTlsConfig::new().with_native_roots())?
         .connect()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to gRPC: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("gRPC connect failed: {}", e))?;
 
     info!("Connected to gRPC endpoint");
 
-    // Filter for ALL three lending protocols in one subscription
+    // Subscribe to ALL accounts owned by the three lending programs.
+    // This gives us both user positions (Obligations/MarginfiAccounts) and
+    // protocol accounts (Banks/Reserves) in one subscription.
     let mut accounts_filter: HashMap<String, SubscribeRequestFilterAccounts> = HashMap::new();
     accounts_filter.insert(
         "lending_positions".to_string(),
@@ -80,37 +79,37 @@ pub async fn start_account_stream(
         ping: None,
         from_slot: None,
     };
-    let (mut _subscribe_tx, mut stream) = client
+
+    let (mut subscribe_tx, mut stream) = client
         .subscribe()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to subscribe: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Subscribe failed: {}", e))?;
 
-    use futures::SinkExt;
-    _subscribe_tx
+    subscribe_tx
         .send(subscribe_request)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to send subscribe request: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Send subscribe request failed: {}", e))?;
 
-    info!("Subscribed to lending protocol accounts. Waiting for updates ...");
+    info!("Subscribed to lending protocol accounts. Waiting for updates...");
+
+    // Build parser dispatch map: program_id → parser implementation
+    let mut parsers: HashMap<&str, Box<dyn ProtocolParser>> = HashMap::new();
+    parsers.insert(KAMINO_PROGRAM_ID, Box::new(KaminoParser));
+    parsers.insert(SAVE_PROGRAM_ID, Box::new(SaveParser));
+    parsers.insert(
+        MARGINFI_V2_PROGRAM_ID,
+        Box::new(MarginfiParser {
+            state: state.clone(),
+        }),
+    );
 
     let mut update_count: u64 = 0;
-
-    let mut parser_map: HashMap<&str, Box<dyn ProtocolParser>> = HashMap::new();
-    parser_map.insert(KAMINO_PROGRAM_ID, Box::new(KaminoParser));
-    parser_map.insert(SAVE_PROGRAM_ID, Box::new(SaveParser));
-    parser_map.insert(MARGINFI_V2_PROGRAM_ID, Box::new(MarginfiParser));
 
     while let Some(message) = stream.next().await {
         match message {
             Ok(update) => {
                 update_count += 1;
-                process_update(
-                    &update,
-                    update_count,
-                    &parser_map,
-                    &tx,
-                    &state,
-                );
+                process_update(&update, update_count, &parsers, &tx, &state);
             }
             Err(e) => {
                 error!("Stream error: {:?}", e);
@@ -118,11 +117,14 @@ pub async fn start_account_stream(
             }
         }
     }
-    warn!("gRPC stream ended after {} updates", update_count);
 
+    warn!("gRPC stream ended after {} updates", update_count);
     Ok(())
 }
 
+/// Routes an account update to the appropriate protocol parser based on the
+/// account's owner (program ID). If the parser returns a PositionUpdate and
+/// the wallet is monitored, caches it and forwards to the DB writer.
 fn process_update(
     update: &SubscribeUpdate,
     count: u64,
@@ -130,38 +132,44 @@ fn process_update(
     tx: &mpsc::Sender<PositionUpdate>,
     state: &Arc<AppState>,
 ) {
-    match &update.update_oneof {
-        Some(UpdateOneof::Account(account_update)) => {
-            if let Some(account_info) = &account_update.account {
-                let pubkey = bs58::encode(&account_info.pubkey).into_string();
-                let slot = account_update.slot;
-                let owner: String = bs58::encode(&account_info.owner).into_string();
+    let Some(UpdateOneof::Account(account_update)) = &update.update_oneof else {
+        return;
+    };
+    let Some(account_info) = &account_update.account else {
+        return;
+    };
 
-                if let Some(parser) = parsers.get(owner.as_str()) {
-                    if let Some(pos) = parser.try_parse(&pubkey, &account_info.data, slot) {
-                        info!(
-                            "{} #{}: owner={} collateral_usd={:.2} debt_usd={:.2}",
-                            pos.protocol, count, pos.owner, pos.collateral_usd, pos.debt_usd
-                        );
-                        if state.monitored_wallets.contains_key(&pos.owner) {
-                            // Cache in memory for instant API lookups
-                            state.positions.insert(pos.pubkey.clone(), pos.clone());
+    let owner = bs58::encode(&account_info.owner).into_string();
+    let Some(parser) = parsers.get(owner.as_str()) else {
+        return;
+    };
 
-                            if let Err(e) = tx.try_send(pos) {
-                                tracing::warn!("Channel full ! Dropping update: {}", e);
-                            }
-                        }
-                    }
-                }
-            }
+    let pubkey = bs58::encode(&account_info.pubkey).into_string();
+    let slot = account_update.slot;
+
+    let Some(pos) = parser.try_parse(&pubkey, &account_info.data, slot) else {
+        return;
+    };
+
+    info!(
+        "{} #{}: owner={} collateral_usd={:.2} debt_usd={:.2}",
+        pos.protocol, count, pos.owner, pos.collateral_usd, pos.debt_usd
+    );
+
+    if state.monitored_wallets.contains_key(&pos.owner) {
+        state.positions.insert(pos.pubkey.clone(), pos.clone());
+
+        if let Err(e) = tx.try_send(pos) {
+            warn!("DB channel full, dropping update: {}", e);
         }
-        Some(UpdateOneof::Ping(_)) => {}
-        _ => {}
     }
 }
 
+/// Background task that receives PositionUpdates from the mpsc channel
+/// and upserts them into Postgres. Uses slot-based deduplication to
+/// ignore out-of-order updates.
 async fn run_db_writer(mut rx: mpsc::Receiver<PositionUpdate>, state: Arc<AppState>) {
-    tracing::info!("Database writer spawned!");
+    info!("Database writer spawned");
 
     while let Some(pos) = rx.recv().await {
         let _ = sqlx::query!(
