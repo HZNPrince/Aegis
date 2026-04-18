@@ -12,3 +12,6 @@ chrono = { workspace = true }
 solana-sdk = { workspace = true }
 uuid = { workspace = true }
 dotenv = { workspace = true }
+dashmap = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }

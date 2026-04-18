@@ -35,29 +35,34 @@ dependencies = [
  "aegis-core",
  "aegis-risk",
  "anyhow",
+ "chrono",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "aegis-api"
 version = "0.1.0"
 dependencies = [
+ "aegis-alerts",
  "aegis-core",
  "aegis-indexer",
  "aegis-risk",
  "anyhow",
  "axum",
- "dotenv",
+ "chrono",
  "serde",
  "serde_json",
+ "sqlx",
  "tokio",
  "tower-http",
  "tracing",
- "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -81,11 +86,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dashmap 6.1.0",
  "dotenv",
  "serde",
  "serde_json",
  "solana-sdk",
+ "sqlx",
  "thiserror 2.0.18",
+ "tokio",
  "uuid",
 ]
 
@@ -126,6 +134,23 @@ dependencies = [
  "chrono",
  "serde",
  "tracing",
+]
+
+[[package]]
+name = "aegis-server"
+version = "0.1.0"
+dependencies = [
+ "aegis-alerts",
+ "aegis-api",
+ "aegis-core",
+ "aegis-indexer",
+ "anyhow",
+ "dotenv",
+ "rustls",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3712,6 +3737,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "raydium_indexing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenv",
+ "futures",
+ "rustls",
+ "solana-sdk",
+ "tokio",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "yellowstone-grpc-client",
+ "yellowstone-grpc-proto",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["aegis-alerts", "aegis-api", "aegis-bot","aegis-core", "aegis-indexer", "aegis-risk"]
+members = ["aegis-alerts", "aegis-api", "aegis-bot","aegis-core", "aegis-indexer", "aegis-risk", "aegis-server", "raydium_indexing"]
 
 [workspace.dependencies]
 tokio = { version = "1.50.0", features = ["full"]}
