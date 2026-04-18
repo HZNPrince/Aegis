@@ -13,7 +13,7 @@ use futures::{SinkExt, StreamExt};
 use solana_sdk::bs58;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
-use yellowstone_grpc_client::GeyserGrpcClient;
+use yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient};
 use yellowstone_grpc_proto::geyser::{
     CommitmentLevel, SubscribeRequest, SubscribeRequestFilterAccounts,
     subscribe_update::UpdateOneof,
@@ -37,10 +37,7 @@ const BACKOFF_BASE_MS: u64 = 500;
 const BACKOFF_CAP_MS: u64 = 30_000;
 
 /// Supervisor loop: reconnects forever with jittered exponential backoff.
-pub async fn start_account_stream(
-    grpc_endpoint: &str,
-    state: Arc<AppState>,
-) -> anyhow::Result<()> {
+pub async fn start_account_stream(grpc_endpoint: &str, state: Arc<AppState>) -> anyhow::Result<()> {
     let parsers = build_parsers(state.clone());
     let mut attempt: u32 = 0;
 
@@ -105,6 +102,7 @@ async fn run_session(
         .x_token::<String>(None)?
         .connect_timeout(Duration::from_secs(10))
         .max_decoding_message_size(64 * 1024 * 1024)
+        .tls_config(ClientTlsConfig::new().with_native_roots())?
         .connect()
         .await
         .map_err(|e| anyhow::anyhow!("gRPC connect failed: {}", e))?;
@@ -179,7 +177,15 @@ async fn run_session(
         let pubkey = bs58::encode(&account_info.pubkey).into_string();
         let slot = account_update.slot;
 
-        process_update(&owner, &pubkey, &account_info.data, slot, &parsers, &db_tx, &state);
+        process_update(
+            &owner,
+            &pubkey,
+            &account_info.data,
+            slot,
+            &parsers,
+            &db_tx,
+            &state,
+        );
 
         if last_stats.elapsed() >= Duration::from_secs(30) {
             let secs = last_stats.elapsed().as_secs_f64().max(1.0);
