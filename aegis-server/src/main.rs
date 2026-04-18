@@ -55,8 +55,12 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(aegis_api::start_server(state.clone()));
     info!("[boot] api server online");
 
+    let dispatchers: Vec<Arc<dyn aegis_alerts::dispatch::Dispatcher>> =
+        vec![Arc::new(aegis_alerts::dispatch::LogDispatcher)];
+
     tokio::spawn(aegis_alerts::engine::start_alert_engine(
         state.clone(),
+        dispatchers,
         config.poll_interval_secs,
         config.alert_threshold,
     ));

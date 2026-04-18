@@ -8,11 +8,26 @@ use aegis_risk::health::{WalletRisk, wallet_risk};
 use sqlx::Row;
 use tracing::{error, info};
 
-use crate::llm::{LlmClient, into_alert_record};
+use crate::{
+    dispatch::{Dispatcher, broadcast},
+    llm::{LlmClient, into_alert_record},
+};
 
+/// Orchestration entrypoint: one evaluation pass for one wallet.
+///
+/// Decision tree:
+///   1. If the wallet has active guard rules: fire only when at least one rule
+///      trips AND that rule's own cooldown has elapsed. Stamp `last_fired_at`
+///      on every rule that contributed.
+///   2. If the wallet has no rules: fall back to the global `alert_threshold`
+///      as a default safety net, with a 60-minute per-wallet dedupe.
+///
+/// Either way, we only call the LLM once per evaluation and broadcast to every
+/// configured dispatcher.
 pub async fn evaluate_wallet(
     state: Arc<AppState>,
     llm: &LlmClient,
+    dispatchers: &[Arc<dyn Dispatcher>],
     wallet: &str,
     alert_threshold: f64,
 ) -> anyhow::Result<Option<AlertRecord>> {
@@ -21,29 +36,62 @@ pub async fn evaluate_wallet(
         return Ok(None);
     }
 
-    if risk.health_score > alert_threshold {
-        return Ok(None);
-    }
+    let rules = load_guard_rules(&state, wallet).await?;
+    let tripped: Vec<&GuardRule> = matching_guard_rules(&risk, &rules);
 
-    if alert_recently_sent(&state, wallet).await? {
+    // Mode selection: rules-driven vs. threshold fallback.
+    let fire = if rules.is_empty() {
+        // No rules configured — use the global default threshold.
+        if risk.health_score > alert_threshold {
+            return Ok(None);
+        }
+        if alert_recently_sent(&state, wallet).await? {
+            return Ok(None);
+        }
+        true
+    } else {
+        // Rules exist — only fire for rules whose cooldown has elapsed.
+        let now = chrono::Utc::now();
+        let fireable: Vec<&GuardRule> = tripped
+            .iter()
+            .copied()
+            .filter(|r| rule_cooldown_elapsed(r, now))
+            .collect();
+        if fireable.is_empty() {
+            return Ok(None);
+        }
+        // Stamp last_fired_at on each rule that will fire so cooldowns advance.
+        for rule in &fireable {
+            if let Some(id) = rule.id.as_ref() {
+                stamp_rule_fired(&state, id).await?;
+            }
+        }
+        true
+    };
+
+    if !fire {
         return Ok(None);
     }
 
     let payload = llm.explain_risk(&risk).await?;
     let alert: AlertRecord = into_alert_record(risk, payload);
     persist_alert(&state, &alert).await?;
+    broadcast(dispatchers, &alert).await;
     Ok(Some(alert))
 }
 
 pub async fn start_alert_engine(
     state: Arc<AppState>,
+    dispatchers: Vec<Arc<dyn Dispatcher>>,
     poll_interval_secs: u64,
     alert_threshold: f64,
 ) {
     let llm = LlmClient::from_env();
     info!(
-        "alert engine started: poll_interval={}s threshold={}",
-        poll_interval_secs, alert_threshold
+        "[alerts] engine started: poll={}s threshold={} dispatchers={}",
+        poll_interval_secs,
+        alert_threshold,
+        dispatchers.len()
     );
 
     loop {
@@ -54,8 +102,10 @@ pub async fn start_alert_engine(
             .collect();
 
         for wallet in wallets {
-            if let Err(err) = evaluate_wallet(state.clone(), &llm, &wallet, alert_threshold).await {
-                error!("alert evaluation failed for {}: {}", wallet, err);
+            if let Err(err) =
+                evaluate_wallet(state.clone(), &llm, &dispatchers, &wallet, alert_threshold).await
+            {
+                error!("[alerts] evaluation failed for {}: {}", wallet, err);
             }
         }
 
@@ -63,9 +113,26 @@ pub async fn start_alert_engine(
     }
 }
 
+/// A rule's cooldown has elapsed if it has never fired, or enough time has
+/// passed since it last did.
+fn rule_cooldown_elapsed(rule: &GuardRule, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Some(last) = rule.last_fired_at else {
+        return true;
+    };
+    (now - last).num_seconds() >= rule.cooldown_seconds
+}
+
+async fn stamp_rule_fired(state: &AppState, rule_id: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE guard_rules SET last_fired_at = NOW() WHERE id = $1::uuid")
+        .bind(rule_id)
+        .execute(&state.db_pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn load_guard_rules(state: &AppState, wallet: &str) -> anyhow::Result<Vec<GuardRule>> {
     let rows = sqlx::query(
-        "SELECT id, wallet_pubkey, protocol, trigger_kind, trigger_value, action_kind, action_token, action_amount_usd, max_usd_per_action, daily_limit_usd, cooldown_seconds, is_active, created_at, updated_at
+        "SELECT id, wallet_pubkey, protocol, trigger_kind, trigger_value, action_kind, action_token, action_amount_usd, max_usd_per_action, daily_limit_usd, cooldown_seconds, is_active, created_at, updated_at, last_fired_at
          FROM guard_rules
          WHERE wallet_pubkey = $1
          ORDER BY created_at DESC",
@@ -151,6 +218,7 @@ fn map_guard_rule(row: sqlx::postgres::PgRow) -> anyhow::Result<GuardRule> {
         is_active: row.try_get("is_active")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        last_fired_at: row.try_get("last_fired_at")?,
     })
 }
 

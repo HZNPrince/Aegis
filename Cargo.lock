@@ -35,6 +35,7 @@ dependencies = [
  "aegis-core",
  "aegis-risk",
  "anyhow",
+ "async-trait",
  "chrono",
  "reqwest 0.13.2",
  "serde",
