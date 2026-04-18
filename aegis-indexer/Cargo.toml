@@ -3,10 +3,6 @@ name = "aegis-indexer"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "test-stream"
-path = "src/bin/test_stream.rs"
-
 [dependencies]
 aegis-core = { path = "../aegis-core" }
 tokio = { workspace = true }

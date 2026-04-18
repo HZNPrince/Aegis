@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use aegis_indexer::state::AppState;
 use sqlx::PgPool;
+use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -25,18 +26,18 @@ async fn main() -> anyhow::Result<()> {
     let rpc_url = std::env::var("RPC_ENDPOINT").expect("RPC_ENDPOINT must be set in .env");
 
     let pool = PgPool::connect(&db_url).await?;
-    let state = Arc::new(AppState::new(pool));
+    let (db_tx, db_rx) = mpsc::channel(1_000);
+    let state = Arc::new(AppState::new(pool, db_tx));
 
-    // Phase 1: Discover all token mints from Marginfi Banks + Kamino Reserves
+    tokio::spawn(aegis_indexer::writer::run_db_writer(db_rx, state.clone()));
+
     let token_mints = aegis_indexer::oracle::discover_mints(&rpc_url, &state).await?;
 
-    // Phase 2: Start background price polling
     tokio::spawn(aegis_indexer::oracle::start_jupiter_poller(
         state.clone(),
         token_mints,
     ));
 
-    // Phase 3: Mock a monitored wallet and start gRPC stream
     let dummy_user = "YubozzSnKomEnH3pkmYsdatUUwUTcm7s4mHJVmefEWj";
     state.monitored_wallets.insert(dummy_user.to_string(), true);
     tracing::info!("Monitoring wallet: {}", dummy_user);
