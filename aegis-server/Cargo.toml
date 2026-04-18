@@ -11,6 +11,7 @@ path = "src/main.rs"
 aegis-core = { path = "../aegis-core" }
 aegis-indexer = { path = "../aegis-indexer" }
 aegis-api = { path = "../aegis-api" }
+aegis-alerts = { path = "../aegis-alerts" }
 tokio = { workspace = true }
 sqlx = { workspace = true }
 tracing = { workspace = true }
