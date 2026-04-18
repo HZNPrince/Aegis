@@ -99,7 +99,7 @@ async fn run_session(
     state: Arc<AppState>,
     parsers: Arc<HashMap<String, Box<dyn ProtocolParser>>>,
 ) -> anyhow::Result<()> {
-    info!("Connecting to Yellowstone gRPC at {}", grpc_endpoint);
+    info!("[grpc] connecting to Yellowstone at {}", grpc_endpoint);
 
     let mut client = GeyserGrpcClient::build_from_shared(grpc_endpoint.to_string())?
         .x_token::<String>(None)?
@@ -109,7 +109,7 @@ async fn run_session(
         .await
         .map_err(|e| anyhow::anyhow!("gRPC connect failed: {}", e))?;
 
-    info!("Connected to gRPC endpoint");
+    info!("[grpc] connected");
 
     let mut accounts_filter: HashMap<String, SubscribeRequestFilterAccounts> = HashMap::new();
     accounts_filter.insert(
@@ -150,16 +150,18 @@ async fn run_session(
         .await
         .map_err(|e| anyhow::anyhow!("Send subscribe request failed: {}", e))?;
 
-    info!("Subscribed to lending protocol accounts");
+    info!("[grpc] subscribed to Kamino, Save, Marginfi accounts");
 
     let db_tx = state.db_writer_tx.clone();
     let mut update_count: u64 = 0;
     let mut dispatched: u64 = 0;
+    let mut window_msgs: u64 = 0;
     let mut last_stats = Instant::now();
 
     while let Some(message) = stream.next().await {
         let update = message.map_err(|e| anyhow::anyhow!("stream error: {:?}", e))?;
         update_count += 1;
+        window_msgs += 1;
 
         let Some(UpdateOneof::Account(account_update)) = update.update_oneof else {
             continue;
@@ -180,12 +182,17 @@ async fn run_session(
         process_update(&owner, &pubkey, &account_info.data, slot, &parsers, &db_tx, &state);
 
         if last_stats.elapsed() >= Duration::from_secs(30) {
+            let secs = last_stats.elapsed().as_secs_f64().max(1.0);
+            let rate = window_msgs as f64 / secs;
             info!(
-                "STATS: {} messages | {} dispatched | {} cached positions",
+                "[grpc] {:.0} msg/s | {} total | {} dispatched | {} positions | {} prices",
+                rate,
                 update_count,
                 dispatched,
-                state.positions.len()
+                state.positions.len(),
+                state.token_prices.len(),
             );
+            window_msgs = 0;
             last_stats = Instant::now();
         }
     }

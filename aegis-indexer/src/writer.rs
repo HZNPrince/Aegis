@@ -8,20 +8,28 @@ use std::sync::Arc;
 
 use aegis_core::{state::AppState, types::PositionUpdate};
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
 
 pub async fn run_db_writer(mut rx: mpsc::Receiver<PositionUpdate>, state: Arc<AppState>) {
-    info!("Database writer spawned");
+    info!("[writer] spawned — draining position updates into postgres");
+
+    let mut written: u64 = 0;
+    let mut failed: u64 = 0;
 
     while let Some(pos) = rx.recv().await {
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "INSERT INTO wallets (pubkey) VALUES ($1) ON CONFLICT (pubkey) DO NOTHING",
         )
         .bind(&pos.owner)
         .execute(&state.db_pool)
-        .await;
+        .await
+        {
+            failed += 1;
+            warn!("[writer] wallet upsert failed for {}: {}", pos.owner, e);
+            continue;
+        }
 
-        let _ = sqlx::query(
+        match sqlx::query(
             "INSERT INTO positions (wallet_pubkey, obligation_pubkey, protocol, collateral_usd, debt_usd, last_slot)
              VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (obligation_pubkey)
@@ -35,6 +43,18 @@ pub async fn run_db_writer(mut rx: mpsc::Receiver<PositionUpdate>, state: Arc<Ap
         .bind(pos.debt_usd)
         .bind(pos.slot as i64)
         .execute(&state.db_pool)
-        .await;
+        .await
+        {
+            Ok(_) => {
+                written += 1;
+                if written % 50 == 0 {
+                    info!("[writer] persisted {} positions ({} failed)", written, failed);
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                warn!("[writer] position upsert failed for {}: {}", pos.pubkey, e);
+            }
+        }
     }
 }
