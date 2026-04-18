@@ -1,3 +1,6 @@
 /target
 .env
 /Antigravity
+/raydium_indexing
+*-session.jsonl
+final_context.txt
