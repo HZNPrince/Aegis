@@ -7,7 +7,7 @@
 //! Adding a new channel (Telegram, Slack, webhook) = one new type that
 //! impls this trait. No engine changes required.
 
-use aegis_core::types::AlertRecord;
+use aegis_core::types::{AlertRecord, AlertSeverity};
 use async_trait::async_trait;
 use tracing::{info, warn};
 
@@ -41,6 +41,89 @@ impl Dispatcher for LogDispatcher {
         }
         Ok(())
     }
+}
+
+/// Sends alerts to a single Telegram chat via the Bot API. For MVP this
+/// is one global admin chat — every alert for every monitored wallet lands
+/// there. Multi-user fan-out becomes a `wallets.telegram_chat_id` column
+/// later without touching this dispatcher.
+pub struct TelegramDispatcher {
+    http: reqwest::Client,
+    token: String,
+    chat_id: String,
+}
+
+impl TelegramDispatcher {
+    /// Returns `None` when either env var is missing so the server can
+    /// register it conditionally without panicking in local dev.
+    pub fn from_env() -> Option<Self> {
+        let token = std::env::var("TELEGRAM_BOT_TOKEN").ok().filter(|v| !v.is_empty())?;
+        let chat_id = std::env::var("TG_CHAT_ID")
+            .ok()
+            .or_else(|| std::env::var("TELEGRAM_ADMIN_CHAT_ID").ok())
+            .filter(|v| !v.is_empty())?;
+        Some(Self {
+            http: reqwest::Client::new(),
+            token,
+            chat_id,
+        })
+    }
+}
+
+#[async_trait]
+impl Dispatcher for TelegramDispatcher {
+    fn name(&self) -> &'static str {
+        "telegram"
+    }
+
+    async fn send(&self, alert: &AlertRecord) -> anyhow::Result<()> {
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
+        let text = format_alert_markdown(alert);
+
+        let resp = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({
+                "chat_id": self.chat_id,
+                "text": text,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": true,
+            }))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("telegram sendMessage {}: {}", status, body);
+        }
+        Ok(())
+    }
+}
+
+fn format_alert_markdown(alert: &AlertRecord) -> String {
+    let emoji = match alert.severity {
+        AlertSeverity::Critical => "🚨",
+        AlertSeverity::Warning => "⚠️",
+        AlertSeverity::Info => "ℹ️",
+    };
+    let short_wallet = if alert.wallet.len() > 12 {
+        format!("{}…{}", &alert.wallet[..4], &alert.wallet[alert.wallet.len() - 4..])
+    } else {
+        alert.wallet.clone()
+    };
+
+    let mut out = format!(
+        "{} *{:?}* — {}\n\n*Wallet:* `{}`\n*Health:* {:.1}/100   *LTV:* {:.3}\n\n{}",
+        emoji, alert.severity, alert.title, short_wallet, alert.health_score, alert.ltv, alert.message,
+    );
+    if !alert.suggested_actions.is_empty() {
+        out.push_str("\n\n*Suggested:*");
+        for a in &alert.suggested_actions {
+            out.push_str(&format!("\n• {}", a));
+        }
+    }
+    out
 }
 
 /// Fan one alert out to every dispatcher. Called by the engine after the

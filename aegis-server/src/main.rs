@@ -55,8 +55,14 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(aegis_api::start_server(state.clone()));
     info!("[boot] api server online");
 
-    let dispatchers: Vec<Arc<dyn aegis_alerts::dispatch::Dispatcher>> =
+    let mut dispatchers: Vec<Arc<dyn aegis_alerts::dispatch::Dispatcher>> =
         vec![Arc::new(aegis_alerts::dispatch::LogDispatcher)];
+    if let Some(tg) = aegis_alerts::dispatch::TelegramDispatcher::from_env() {
+        dispatchers.push(Arc::new(tg));
+        info!("[boot] telegram dispatcher registered");
+    } else {
+        info!("[boot] telegram dispatcher disabled (TELEGRAM_BOT_TOKEN / TG_CHAT_ID not set)");
+    }
 
     tokio::spawn(aegis_alerts::engine::start_alert_engine(
         state.clone(),
