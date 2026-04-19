@@ -34,7 +34,7 @@ impl LlmClient {
                 "https://openrouter.ai/api/v1/chat/completions".to_string()
             }),
             model: std::env::var("LLM_MODEL")
-                .unwrap_or_else(|_| "meta-llama/llama-3.3-70b-instruct:free".to_string()),
+                .unwrap_or_else(|_| "openai/gpt-oss-120b:free".to_string()),
         }
     }
 
