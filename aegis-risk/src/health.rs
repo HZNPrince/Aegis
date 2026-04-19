@@ -79,6 +79,7 @@ pub fn risk_from_positions(wallet: String, positions: Vec<PositionUpdate>) -> Wa
     });
 
     let ltv = safe_div(total_debt_usd, total_collateral_usd);
+    // Safe room (Limit - borrowed)
     let liquidation_buffer_usd =
         (total_collateral_usd * DEFAULT_LIQUIDATION_THRESHOLD - total_debt_usd).max(0.0);
     let health_score = ((1.0 - ltv / DEFAULT_LIQUIDATION_THRESHOLD) * 100.0).clamp(0.0, 100.0);

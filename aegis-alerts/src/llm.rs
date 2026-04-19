@@ -2,6 +2,7 @@ use aegis_core::types::{AlertRecord, AlertSeverity};
 use aegis_risk::health::WalletRisk;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertPayload {
@@ -21,12 +22,19 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn from_env() -> Self {
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .ok()
+            .or_else(|| std::env::var("LLM_API_KEY").ok())
+            .filter(|v| !v.is_empty());
+
         Self {
             http: reqwest::Client::new(),
-            api_key: std::env::var("LLM_API_KEY").ok().filter(|v| !v.is_empty()),
-            base_url: std::env::var("LLM_BASE_URL")
-                .unwrap_or_else(|_| "https://api.groq.com/openai/v1/chat/completions".to_string()),
-            model: std::env::var("LLM_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string()),
+            api_key,
+            base_url: std::env::var("LLM_BASE_URL").unwrap_or_else(|_| {
+                "https://openrouter.ai/api/v1/chat/completions".to_string()
+            }),
+            model: std::env::var("LLM_MODEL")
+                .unwrap_or_else(|_| "meta-llama/llama-3.3-70b-instruct:free".to_string()),
         }
     }
 
@@ -51,17 +59,32 @@ impl LlmClient {
             .http
             .post(&self.base_url)
             .bearer_auth(self.api_key.as_ref().unwrap())
+            .header("HTTP-Referer", "https://github.com/HZNPrince/Aegis")
+            .header("X-Title", "Aegis")
             .json(&request)
             .send()
             .await
             .context("failed to call LLM")?;
 
-        let body: serde_json::Value = response.json().await.context("invalid LLM response body")?;
-        let content = body["choices"][0]["message"]["content"]
-            .as_str()
-            .context("missing LLM content")?;
+        let body: serde_json::Value = match response.json().await {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("[llm] non-JSON response, using fallback: {e}");
+                return Ok(fallback_explanation(risk));
+            }
+        };
+        let Some(content) = body["choices"][0]["message"]["content"].as_str() else {
+            warn!("[llm] missing content in response, using fallback");
+            return Ok(fallback_explanation(risk));
+        };
 
-        serde_json::from_str(content).context("failed to parse LLM alert payload")
+        match serde_json::from_str(content) {
+            Ok(payload) => Ok(payload),
+            Err(e) => {
+                warn!("[llm] failed to parse alert payload, using fallback: {e}");
+                Ok(fallback_explanation(risk))
+            }
+        }
     }
 }
 
