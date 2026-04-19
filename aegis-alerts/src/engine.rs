@@ -240,3 +240,120 @@ fn parse_action_kind(value: &str) -> anyhow::Result<aegis_core::types::ActionKin
         _ => anyhow::bail!("unknown action kind: {value}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aegis_core::types::{ActionKind, AlertSeverity, TriggerKind};
+    use aegis_risk::health::ProtocolHealth;
+    use chrono::Duration;
+
+    fn rule(wallet: &str, trigger: TriggerKind, value: f64) -> GuardRule {
+        GuardRule {
+            id: Some("rule-1".into()),
+            wallet: wallet.into(),
+            protocol: None,
+            trigger_kind: trigger,
+            trigger_value: value,
+            action_kind: ActionKind::NotifyOnly,
+            action_token: None,
+            action_amount_usd: None,
+            max_usd_per_action: 0.0,
+            daily_limit_usd: 0.0,
+            cooldown_seconds: 3600,
+            is_active: true,
+            created_at: None,
+            updated_at: None,
+            last_fired_at: None,
+        }
+    }
+
+    fn risk(wallet: &str, health: f64, ltv: f64, debt: f64) -> WalletRisk {
+        WalletRisk {
+            wallet: wallet.into(),
+            health_score: health,
+            severity: AlertSeverity::Warning,
+            total_collateral_usd: 1_000.0,
+            total_debt_usd: debt,
+            ltv,
+            liquidation_threshold: 0.85,
+            liquidation_buffer_usd: 100.0,
+            protocols: vec![ProtocolHealth {
+                protocol: "Kamino".into(),
+                collateral_usd: 1_000.0,
+                debt_usd: debt,
+                ltv,
+                liquidation_threshold: 0.85,
+            }],
+            positions: vec![],
+        }
+    }
+
+    #[test]
+    fn inactive_rules_are_skipped() {
+        let mut r = rule("w", TriggerKind::HealthBelow, 50.0);
+        r.is_active = false;
+        let matched = matching_guard_rules(&risk("w", 10.0, 0.9, 500.0), std::slice::from_ref(&r));
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn wallet_mismatch_is_skipped() {
+        let r = rule("other", TriggerKind::HealthBelow, 50.0);
+        let matched = matching_guard_rules(&risk("w", 10.0, 0.9, 500.0), std::slice::from_ref(&r));
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn protocol_filter_requires_match() {
+        let mut r = rule("w", TriggerKind::HealthBelow, 50.0);
+        r.protocol = Some("Save".into());
+        let matched = matching_guard_rules(&risk("w", 10.0, 0.9, 500.0), std::slice::from_ref(&r));
+        assert!(matched.is_empty(), "risk has only Kamino — Save rule should not match");
+    }
+
+    #[test]
+    fn health_below_trigger_fires_when_under() {
+        let r = rule("w", TriggerKind::HealthBelow, 50.0);
+        assert_eq!(matching_guard_rules(&risk("w", 40.0, 0.5, 0.0), std::slice::from_ref(&r)).len(), 1);
+        assert!(matching_guard_rules(&risk("w", 60.0, 0.5, 0.0), std::slice::from_ref(&r)).is_empty());
+    }
+
+    #[test]
+    fn ltv_above_trigger_fires_when_over() {
+        let r = rule("w", TriggerKind::LtvAbove, 0.7);
+        assert_eq!(matching_guard_rules(&risk("w", 50.0, 0.8, 0.0), std::slice::from_ref(&r)).len(), 1);
+        assert!(matching_guard_rules(&risk("w", 50.0, 0.5, 0.0), std::slice::from_ref(&r)).is_empty());
+    }
+
+    #[test]
+    fn debt_above_usd_trigger_fires_when_over() {
+        let r = rule("w", TriggerKind::DebtAboveUsd, 1_000.0);
+        assert_eq!(matching_guard_rules(&risk("w", 50.0, 0.5, 2_000.0), std::slice::from_ref(&r)).len(), 1);
+        assert!(matching_guard_rules(&risk("w", 50.0, 0.5, 500.0), std::slice::from_ref(&r)).is_empty());
+    }
+
+    #[test]
+    fn cooldown_elapsed_when_never_fired() {
+        let r = rule("w", TriggerKind::HealthBelow, 50.0);
+        assert!(rule_cooldown_elapsed(&r, chrono::Utc::now()));
+    }
+
+    #[test]
+    fn cooldown_not_elapsed_when_recent() {
+        let mut r = rule("w", TriggerKind::HealthBelow, 50.0);
+        let now = chrono::Utc::now();
+        r.last_fired_at = Some(now - Duration::seconds(100));
+        r.cooldown_seconds = 3600;
+        assert!(!rule_cooldown_elapsed(&r, now));
+    }
+
+    #[test]
+    fn cooldown_elapsed_after_window() {
+        let mut r = rule("w", TriggerKind::HealthBelow, 50.0);
+        let now = chrono::Utc::now();
+        r.last_fired_at = Some(now - Duration::seconds(4000));
+        r.cooldown_seconds = 3600;
+        assert!(rule_cooldown_elapsed(&r, now));
+    }
+}
