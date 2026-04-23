@@ -6,4 +6,5 @@
 pub mod config;
 pub mod error;
 pub mod state;
+pub mod symbols;
 pub mod types;

@@ -43,6 +43,11 @@ impl ProtocolParser for SaveParser {
                 let borrowed_sf =
                     u128::from_le_bytes(data[BORROWED_VALUE_START..BORROWED_VALUE_END].try_into().unwrap());
 
+                // TODO(autonomous-execution): populate `legs` by iterating
+                // the obligation's deposits/borrows arrays (byte-offset walk,
+                // no SDK). Each element carries a reserve pubkey + amount;
+                // reserve→mint mapping lives at Reserve offsets we'd read
+                // alongside. Aggregate-only for now.
                 Some(PositionUpdate {
                     pubkey: pubkey.to_string(),
                     owner,
@@ -50,6 +55,7 @@ impl ProtocolParser for SaveParser {
                     collateral_usd: (deposited_sf / WAD) as f64,
                     debt_usd: (borrowed_sf / WAD) as f64,
                     slot,
+                    legs: Vec::new(),
                 })
             }
             RESERVE_LEN => None,

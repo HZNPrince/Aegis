@@ -5,6 +5,10 @@
 
 use std::sync::Arc;
 
+use aegis_core::{
+    symbols::symbol_or_short,
+    types::{PositionLeg, PositionSide},
+};
 use borsh::BorshDeserialize;
 use carbon_marginfi_v2_decoder::accounts::marginfi_account::MarginfiAccount;
 
@@ -46,6 +50,7 @@ impl ProtocolParser for MarginfiParser {
 
         let mut total_collateral_usd = 0.0;
         let mut total_debt_usd = 0.0;
+        let mut legs: Vec<PositionLeg> = Vec::with_capacity(active_balances.len() * 2);
 
         for balance in &active_balances {
             let bank_pk = balance.bank_pk.to_string();
@@ -60,11 +65,14 @@ impl ProtocolParser for MarginfiParser {
             let deposit_shares = balance.asset_shares.value as f64 / i80f48_scale;
             let borrow_shares = balance.liability_shares.value as f64 / i80f48_scale;
 
-            // shares × share_value / 10^decimals = human-readable token amount
-            let deposit_tokens = deposit_shares * bank.asset_share_value / decimals_scale;
-            let borrow_tokens = borrow_shares * bank.liability_share_value / decimals_scale;
+            // shares × share_value = raw on-chain token amount (pre-decimals)
+            let deposit_native_f = deposit_shares * bank.asset_share_value;
+            let borrow_native_f = borrow_shares * bank.liability_share_value;
 
-            // token_amount × jupiter_price = USD
+            // UI = native / 10^decimals
+            let deposit_ui = deposit_native_f / decimals_scale;
+            let borrow_ui = borrow_native_f / decimals_scale;
+
             let price = self
                 .state
                 .token_prices
@@ -72,8 +80,36 @@ impl ProtocolParser for MarginfiParser {
                 .map(|p| *p)
                 .unwrap_or(0.0);
 
-            total_collateral_usd += deposit_tokens * price;
-            total_debt_usd += borrow_tokens * price;
+            let deposit_usd = deposit_ui * price;
+            let borrow_usd = borrow_ui * price;
+
+            total_collateral_usd += deposit_usd;
+            total_debt_usd += borrow_usd;
+
+            let symbol = symbol_or_short(&bank.mint);
+
+            if deposit_native_f > 0.0 {
+                legs.push(PositionLeg {
+                    side: PositionSide::Collateral,
+                    asset_mint: bank.mint.clone(),
+                    asset_symbol: symbol.clone(),
+                    amount_native: native_to_u64(deposit_native_f),
+                    amount_ui: deposit_ui,
+                    value_usd: deposit_usd,
+                    reserve_or_bank: bank_pk.clone(),
+                });
+            }
+            if borrow_native_f > 0.0 {
+                legs.push(PositionLeg {
+                    side: PositionSide::Borrow,
+                    asset_mint: bank.mint.clone(),
+                    asset_symbol: symbol,
+                    amount_native: native_to_u64(borrow_native_f),
+                    amount_ui: borrow_ui,
+                    value_usd: borrow_usd,
+                    reserve_or_bank: bank_pk,
+                });
+            }
         }
 
         Some(PositionUpdate {
@@ -83,6 +119,18 @@ impl ProtocolParser for MarginfiParser {
             collateral_usd: total_collateral_usd,
             debt_usd: total_debt_usd,
             slot,
+            legs,
         })
     }
+}
+
+/// Round a positive f64 of native token units to u64, saturating on overflow.
+fn native_to_u64(x: f64) -> u64 {
+    if !x.is_finite() || x <= 0.0 {
+        return 0;
+    }
+    if x >= u64::MAX as f64 {
+        return u64::MAX;
+    }
+    x.round() as u64
 }

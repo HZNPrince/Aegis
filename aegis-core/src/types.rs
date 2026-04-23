@@ -87,6 +87,32 @@ pub struct PositionUpdate {
     pub debt_usd: f64,
     /// Solana slot this update was observed at
     pub slot: u64,
+    /// Per-asset legs (deposit + borrow rows) required for autonomous
+    /// execution. Empty for protocols where the parser only produces
+    /// aggregates today (Kamino, Save) — the risk engine keeps working off
+    /// `collateral_usd`/`debt_usd` unchanged.
+    #[serde(default)]
+    pub legs: Vec<PositionLeg>,
+}
+
+/// One per-asset row inside a `PositionUpdate`. A single obligation can have
+/// multiple legs — e.g. SOL deposit + USDC borrow = two legs.
+///
+/// `amount_native` is the raw on-chain token amount (pre-decimals) that an
+/// executor feeds straight into a `transfer`/`repay` instruction without
+/// rescaling. `amount_ui` is the same value with decimals applied, for
+/// display. `reserve_or_bank` identifies the protocol-side account the
+/// executor must pass into the instruction (Marginfi bank / Kamino+Save
+/// reserve).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositionLeg {
+    pub side: PositionSide,
+    pub asset_mint: String,
+    pub asset_symbol: String,
+    pub amount_native: u64,
+    pub amount_ui: f64,
+    pub value_usd: f64,
+    pub reserve_or_bank: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

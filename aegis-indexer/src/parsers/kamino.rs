@@ -33,6 +33,12 @@ impl ProtocolParser for KaminoParser {
                     return None;
                 }
 
+                // TODO(autonomous-execution): populate `legs` from
+                // `obligation.deposits[]` / `obligation.borrows[]`. Each
+                // entry carries a reserve pubkey and a share amount; we need
+                // a reserve→mint lookup (Reserve.liquidity.mint_pubkey) plus
+                // collateral_exchange_rate to derive native token amounts.
+                // Left aggregate-only for now — risk engine is unaffected.
                 Some(PositionUpdate {
                     pubkey: pubkey.to_string(),
                     owner: bs58::encode(&obligation.owner).into_string(),
@@ -40,6 +46,7 @@ impl ProtocolParser for KaminoParser {
                     collateral_usd: collateral as f64,
                     debt_usd: debt as f64,
                     slot,
+                    legs: Vec::new(),
                 })
             }
             // Reserve = lending pool config. Not a user position.

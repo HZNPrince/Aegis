@@ -75,6 +75,7 @@ mod tests {
                 collateral_usd: 1_000.0,
                 debt_usd: 700.0,
                 slot: 1,
+                legs: Vec::new(),
             }],
         );
 

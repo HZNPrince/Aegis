@@ -124,6 +124,7 @@ mod tests {
             collateral_usd,
             debt_usd,
             slot: 1,
+            legs: Vec::new(),
         }
     }
 
