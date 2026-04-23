@@ -58,7 +58,10 @@ pub async fn backfill_wallet(
     let client = RpcClient::new(rpc_url.to_string());
     let mut parsers: std::collections::HashMap<String, Box<dyn ProtocolParser>> =
         std::collections::HashMap::new();
-    parsers.insert(KAMINO_PROGRAM_ID.to_string(), Box::new(KaminoParser));
+    parsers.insert(
+        KAMINO_PROGRAM_ID.to_string(),
+        Box::new(KaminoParser { state: state.clone() }),
+    );
     parsers.insert(SAVE_PROGRAM_ID.to_string(), Box::new(SaveParser));
     parsers.insert(
         MARGINFI_V2_PROGRAM_ID.to_string(),

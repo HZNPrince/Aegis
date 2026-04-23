@@ -64,7 +64,10 @@ pub async fn start_account_stream(grpc_endpoint: &str, state: Arc<AppState>) -> 
 
 fn build_parsers(state: Arc<AppState>) -> Arc<HashMap<String, Box<dyn ProtocolParser>>> {
     let mut parsers: HashMap<String, Box<dyn ProtocolParser>> = HashMap::new();
-    parsers.insert(KAMINO_PROGRAM_ID.to_string(), Box::new(KaminoParser));
+    parsers.insert(
+        KAMINO_PROGRAM_ID.to_string(),
+        Box::new(KaminoParser { state: state.clone() }),
+    );
     parsers.insert(SAVE_PROGRAM_ID.to_string(), Box::new(SaveParser));
     parsers.insert(
         MARGINFI_V2_PROGRAM_ID.to_string(),

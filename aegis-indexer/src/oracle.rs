@@ -127,9 +127,17 @@ pub async fn discover_mints(
                 continue;
             }
             kamino_mapped += 1;
+            let pubkey_str = pubkey.to_string();
             state
                 .token_mints
-                .insert(pubkey.to_string(), mint_str.clone());
+                .insert(pubkey_str.clone(), mint_str.clone());
+            state.reserve_cache.insert(
+                pubkey_str,
+                crate::state::ReserveData {
+                    mint: mint_str.clone(),
+                    mint_decimals: reserve.liquidity.mint_decimals as u8,
+                },
+            );
             mint_pubkeys.insert(mint_str);
         }
     }

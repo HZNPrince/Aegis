@@ -43,11 +43,27 @@ impl ProtocolParser for SaveParser {
                 let borrowed_sf =
                     u128::from_le_bytes(data[BORROWED_VALUE_START..BORROWED_VALUE_END].try_into().unwrap());
 
-                // TODO(autonomous-execution): populate `legs` by iterating
-                // the obligation's deposits/borrows arrays (byte-offset walk,
-                // no SDK). Each element carries a reserve pubkey + amount;
-                // reserve→mint mapping lives at Reserve offsets we'd read
-                // alongside. Aggregate-only for now.
+                // TODO(save-legs): populate per-asset legs.
+                //
+                // Save is a Solend fork with no Rust SDK. The Obligation layout
+                // past byte 106 (what we read today) continues:
+                //   +106 allowed_borrow_value         u128 (16)
+                //   +122 unhealthy_borrow_value       u128 (16)
+                //   +138 super_unhealthy_borrow_val   u128 (16)
+                //   +154 borrowing_isolated_asset     u8   (1)
+                //   +155 deposits_len                 u8   (1)
+                //   +156 borrows_len                  u8   (1)
+                //   +157 <packed deposits then borrows, element sizes TBD>
+                //
+                // ObligationCollateral / ObligationLiquidity element sizes
+                // vary between Solend versions. Safest path: fetch one real
+                // Save obligation account, verify element sizes by matching
+                // known `deposits_len` + `borrows_len` against total leftover
+                // bytes (1300 - 157 = 1143), then code the walk with fixtures
+                // under tests/.
+                //
+                // Leaving aggregate-only for now so we don't emit wrong legs
+                // that later feed the executor.
                 Some(PositionUpdate {
                     pubkey: pubkey.to_string(),
                     owner,

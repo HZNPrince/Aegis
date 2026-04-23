@@ -20,6 +20,16 @@ pub struct BankData {
     pub liability_share_value: f64,
 }
 
+/// Cached data from a Kamino Reserve — just what the parser needs to turn
+/// a per-obligation leg into mint + decimals + value. The Marginfi analog
+/// is `BankData`; Kamino's share-exchange math happens at refresh-obligation
+/// time on-chain, so we don't need to hold share_values here.
+#[derive(Debug, Clone)]
+pub struct ReserveData {
+    pub mint: String,
+    pub mint_decimals: u8,
+}
+
 pub struct AppState {
     pub positions: DashMap<String, PositionUpdate>,
     pub monitored_wallets: DashMap<String, bool>,
@@ -27,6 +37,7 @@ pub struct AppState {
     pub token_prices: DashMap<String, f64>,
     pub token_mints: DashMap<String, String>,
     pub bank_cache: DashMap<String, BankData>,
+    pub reserve_cache: DashMap<String, ReserveData>,
     pub db_pool: PgPool,
     /// Sender half of the DB writer channel. Both the gRPC stream and the
     /// backfill job push position updates through this single channel so the
@@ -43,6 +54,7 @@ impl AppState {
             token_prices: DashMap::new(),
             token_mints: DashMap::new(),
             bank_cache: DashMap::new(),
+            reserve_cache: DashMap::new(),
             db_pool,
             db_writer_tx,
         }
