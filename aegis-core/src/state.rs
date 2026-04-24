@@ -35,6 +35,9 @@ pub struct AppState {
     pub monitored_wallets: DashMap<String, bool>,
     pub update_count: AtomicU64,
     pub token_prices: DashMap<String, f64>,
+    /// Jupiter-reported 24h price change in percent (e.g. 1.52 = +1.52%).
+    /// Populated from the same poll that writes `token_prices`.
+    pub token_price_changes: DashMap<String, f64>,
     pub token_mints: DashMap<String, String>,
     pub bank_cache: DashMap<String, BankData>,
     pub reserve_cache: DashMap<String, ReserveData>,
@@ -52,6 +55,7 @@ impl AppState {
             monitored_wallets: DashMap::new(),
             update_count: AtomicU64::new(0),
             token_prices: DashMap::new(),
+            token_price_changes: DashMap::new(),
             token_mints: DashMap::new(),
             bank_cache: DashMap::new(),
             reserve_cache: DashMap::new(),

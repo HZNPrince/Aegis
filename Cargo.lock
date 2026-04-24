@@ -52,6 +52,7 @@ version = "0.1.0"
 dependencies = [
  "aegis-alerts",
  "aegis-core",
+ "aegis-executor",
  "aegis-indexer",
  "aegis-risk",
  "anyhow",
@@ -96,6 +97,26 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "aegis-executor"
+version = "0.1.0"
+dependencies = [
+ "aegis-core",
+ "anyhow",
+ "base64 0.22.1",
+ "bincode",
+ "borsh 1.6.1",
+ "carbon-marginfi-v2-decoder",
+ "chrono",
+ "klend-sdk",
+ "serde",
+ "solana-client",
+ "solana-sdk",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

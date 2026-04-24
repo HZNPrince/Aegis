@@ -31,12 +31,16 @@ pub async fn start_server(state: Arc<AppState>) {
     let app = Router::new()
         .route("/api/status", get(handlers::status))
         .route("/api/prices", get(handlers::prices))
+        .route("/api/ticker", get(handlers::ticker))
         .route("/api/wallets/{wallet}", post(handlers::link_wallet))
         .route("/api/health/{wallet}", get(handlers::wallet_health))
         .route("/api/scenario", post(handlers::scenario))
         .route("/api/alerts/{wallet}", get(handlers::list_alerts))
         .route("/api/guard-rules/{wallet}", get(handlers::list_guard_rules))
         .route("/api/guard-rules", post(handlers::upsert_guard_rule))
+        .route("/api/execute/repay", post(handlers::build_repay))
+        .route("/api/intents/{wallet}", get(handlers::list_intents))
+        .route("/api/intents/{intent_id}/status", axum::routing::patch(handlers::update_intent))
         .layer(cors)
         .with_state(state);
 

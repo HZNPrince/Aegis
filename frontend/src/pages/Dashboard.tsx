@@ -14,9 +14,9 @@ import {
   SidePill,
   Skeleton,
 } from '../components/ui';
-import { useAlerts, useHealth } from '../hooks';
+import { useAlerts, useHealth, useIntents, useRepayIntent, useCancelIntent } from '../hooks';
 import { MOCK_ALERTS, MOCK_HEALTH } from '../mockData';
-import type { Alert, ProtocolLtv } from '../types';
+import type { Alert, IntentRow, Position, ProtocolLtv } from '../types';
 import { alertWireToAlert, fmtUsd, timeAgo, truncAddr, walletRiskToHealth } from '../utils';
 
 export function Dashboard() {
@@ -26,6 +26,7 @@ export function Dashboard() {
 
   const healthQ = useHealth(useLive ? wallet : null);
   const alertsQ = useAlerts(useLive ? wallet : null);
+  const intentsQ = useIntents(useLive ? wallet : null);
 
   const data = useMemo(
     () => (useLive && healthQ.data ? walletRiskToHealth(healthQ.data) : MOCK_HEALTH),
@@ -352,6 +353,12 @@ export function Dashboard() {
                           >
                             View on Explorer ↗
                           </a>
+                          {useLive &&
+                            pos.side === 'Borrow' &&
+                            pos.reserve_or_bank &&
+                            pos.amount_native ? (
+                            <RepayButton pos={pos} wallet={wallet!} />
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -364,6 +371,13 @@ export function Dashboard() {
       </Card>
 
       {!loading && <PriceTickerRail />}
+
+      {useLive && intentsQ.data && intentsQ.data.length > 0 ? (
+        <div style={{ marginTop: 20 }}>
+          <SectionLabel>Pending Actions</SectionLabel>
+          <IntentsPanel intents={intentsQ.data} />
+        </div>
+      ) : null}
 
       <div style={{ marginTop: 20 }}>
         <SectionLabel>Recent Alerts</SectionLabel>
@@ -535,6 +549,165 @@ function AlertRow({ alert }: { alert: Alert }) {
       >
         {timeAgo(alert.created_at)}
       </div>
+    </div>
+  );
+}
+
+function RepayButton({ pos, wallet }: { pos: Position; wallet: string }) {
+  const repay = useRepayIntent();
+  const onClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!pos.reserve_or_bank || !pos.amount_native) return;
+    repay.mutate({
+      wallet,
+      obligation_or_account: pos.obligation_address,
+      protocol: pos.protocol,
+      reserve_or_bank: pos.reserve_or_bank,
+      mint: pos.asset_mint,
+      amount_native: pos.amount_native,
+    });
+  };
+  const disabled = repay.isPending;
+  const errMsg = repay.error instanceof Error ? repay.error.message : null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          padding: '6px 14px',
+          borderRadius: 8,
+          border: '1px solid rgba(217,119,87,0.4)',
+          background: disabled ? 'rgba(217,119,87,0.15)' : 'rgba(217,119,87,0.22)',
+          color: '#F5E1D6',
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 12,
+          fontWeight: 600,
+          letterSpacing: '0.02em',
+          cursor: disabled ? 'default' : 'pointer',
+        }}
+      >
+        {disabled
+          ? 'Signing…'
+          : repay.isSuccess
+            ? `Repay queued ✓`
+            : `Repay ${pos.asset_symbol}`}
+      </button>
+      {errMsg ? (
+        <span
+          style={{
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 11,
+            color: '#D9604E',
+            maxWidth: 320,
+          }}
+        >
+          {errMsg}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function IntentsPanel({ intents }: { intents: IntentRow[] }) {
+  const active = intents.filter(
+    (i) => i.status === 'pending' || i.status === 'submitted',
+  );
+  const recent = intents
+    .filter((i) => !(i.status === 'pending' || i.status === 'submitted'))
+    .slice(0, 3);
+  const rows = [...active, ...recent];
+  if (rows.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {rows.map((it) => (
+        <IntentRowView key={it.id} it={it} />
+      ))}
+    </div>
+  );
+}
+
+function IntentRowView({ it }: { it: IntentRow }) {
+  const cancel = useCancelIntent();
+  const color =
+    it.status === 'confirmed'
+      ? '#7DA87B'
+      : it.status === 'submitted' || it.status === 'pending'
+        ? '#E4A853'
+        : '#D9604E';
+  // Allow clearing submitted intents too — sometimes the confirm loop can't
+  // finalize (RPC timeout, blockhash lapse) and the user wants it out of the list.
+  const canCancel = it.status === 'pending' || it.status === 'submitted';
+  return (
+    <div
+      style={{
+        background: '#2A2826',
+        borderRadius: 12,
+        border: '1px solid rgba(255,255,255,0.06)',
+        borderLeft: `3px solid ${color}`,
+        padding: '12px 16px',
+        display: 'flex',
+        gap: 16,
+        alignItems: 'center',
+        fontFamily: "'Inter', sans-serif",
+        fontSize: 12,
+      }}
+    >
+      <span
+        style={{
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+          color,
+          fontWeight: 700,
+          fontSize: 10,
+          minWidth: 70,
+        }}
+      >
+        {it.status}
+      </span>
+      <span style={{ color: '#F5F4EF', fontWeight: 600 }}>
+        Repay {it.amount_native.toLocaleString()} · {it.protocol}
+      </span>
+      <span
+        style={{
+          fontFamily: "'JetBrains Mono', monospace",
+          color: 'rgba(245,244,239,0.5)',
+          fontSize: 11,
+        }}
+      >
+        {truncAddr(it.mint)}
+      </span>
+      <div style={{ flex: 1 }} />
+      {it.signature ? (
+        <a
+          href={`https://explorer.solana.com/tx/${it.signature}`}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: '#D97757', textDecoration: 'none', fontSize: 11 }}
+        >
+          tx ↗
+        </a>
+      ) : null}
+      <span style={{ color: 'rgba(245,244,239,0.35)', fontSize: 11 }}>
+        {timeAgo(it.created_at)}
+      </span>
+      {canCancel ? (
+        <button
+          onClick={() => cancel.mutate(it.id)}
+          style={{
+            background: 'none',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: 6,
+            padding: '4px 10px',
+            color: 'rgba(245,244,239,0.6)',
+            fontSize: 11,
+            cursor: 'pointer',
+          }}
+        >
+          dismiss
+        </button>
+      ) : null}
     </div>
   );
 }

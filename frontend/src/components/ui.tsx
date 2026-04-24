@@ -2,7 +2,21 @@ import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { Protocol, Severity, Side } from '../types';
 import { severityColor } from '../utils';
-import { MOCK_PRICES, MOCK_WALLET_FULL, MOCK_WALLET_SHORT } from '../mockData';
+import { useTicker } from '../hooks';
+import { MOCK_WALLET_FULL, MOCK_WALLET_SHORT } from '../mockData';
+
+// Curated ticker list: symbol → mainnet mint. Kept small + recognizable;
+// we look these up in the backend's live price cache (Jupiter-polled).
+const TICKER_TOKENS: Array<{ symbol: string; mint: string }> = [
+  { symbol: 'SOL', mint: 'So11111111111111111111111111111111111111112' },
+  { symbol: 'JitoSOL', mint: 'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn' },
+  { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' },
+  { symbol: 'USDT', mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB' },
+  { symbol: 'BONK', mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' },
+  { symbol: 'WIF', mint: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm' },
+  { symbol: 'JUP', mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN' },
+  { symbol: 'PYTH', mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3' },
+];
 
 export function Card({
   children,
@@ -264,8 +278,22 @@ export function SectionLabel({ children }: { children: ReactNode }) {
 }
 
 export function PriceTickerRail() {
-  const tokens = Object.entries(MOCK_PRICES);
-  const doubled = [...tokens, ...tokens];
+  const tickerQ = useTicker();
+
+  // Only render tokens present in the backend cache. The delta is Jupiter's
+  // real 24h change — no more session-delta placeholder or Math.random().
+  const rows = TICKER_TOKENS.filter(
+    ({ mint }) => tickerQ.data?.[mint]?.price !== undefined,
+  ).map(({ symbol, mint }) => {
+    const entry = tickerQ.data![mint];
+    return {
+      symbol,
+      price: entry.price,
+      delta: entry.change_24h ?? 0,
+    };
+  });
+
+  const doubled = [...rows, ...rows];
   return (
     <div
       style={{
@@ -284,43 +312,53 @@ export function PriceTickerRail() {
           width: 'max-content',
         }}
       >
-        {doubled.map(([sym, price], i) => (
-          <div
-            key={i}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '0 28px',
-              borderRight: '1px solid rgba(255,255,255,0.06)',
-              flexShrink: 0,
-            }}
-          >
-            <span
+        {doubled.map(({ symbol, price, delta }, i) => {
+          const display =
+            price < 0.01
+              ? price.toFixed(8)
+              : price < 10
+                ? price.toFixed(4)
+                : price.toFixed(2);
+          const deltaColor = delta > 0 ? '#7DA87B' : delta < 0 ? '#D9604E' : 'rgba(245,244,239,0.35)';
+          const deltaGlyph = delta > 0 ? '▲' : delta < 0 ? '▼' : '·';
+          return (
+            <div
+              key={i}
               style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 12,
-                color: 'rgba(245,244,239,0.45)',
-                fontWeight: 500,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '0 28px',
+                borderRight: '1px solid rgba(255,255,255,0.06)',
+                flexShrink: 0,
               }}
             >
-              {sym}
-            </span>
-            <span
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 12,
-                color: '#F5F4EF',
-                fontWeight: 500,
-              }}
-            >
-              {price < 0.01 ? price.toFixed(8) : price < 10 ? price.toFixed(4) : price.toFixed(2)}
-            </span>
-            <span style={{ fontSize: 10, color: '#7DA87B' }}>
-              ▲ {(Math.random() * 3 + 0.1).toFixed(2)}%
-            </span>
-          </div>
-        ))}
+              <span
+                style={{
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 12,
+                  color: 'rgba(245,244,239,0.45)',
+                  fontWeight: 500,
+                }}
+              >
+                {symbol}
+              </span>
+              <span
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 12,
+                  color: '#F5F4EF',
+                  fontWeight: 500,
+                }}
+              >
+                {display}
+              </span>
+              <span style={{ fontSize: 10, color: deltaColor }}>
+                {deltaGlyph} {Math.abs(delta).toFixed(2)}%
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

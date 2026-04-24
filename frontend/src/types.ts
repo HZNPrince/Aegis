@@ -16,6 +16,9 @@ export interface Position {
   amount: number;
   value_usd: number;
   updated_at: string;
+  // Present only on live rows built from PositionLeg — enables one-click repay.
+  reserve_or_bank?: string;
+  amount_native?: number;
 }
 
 export interface ProtocolLtv {
@@ -146,6 +149,51 @@ export interface GuardRuleWire {
   created_at?: string | null;
   updated_at?: string | null;
   last_fired_at?: string | null;
+}
+
+// ── Executor / intents ──
+
+export interface BuildRepayBody {
+  wallet: string;
+  obligation_or_account: string;
+  protocol: string;
+  reserve_or_bank: string;
+  mint: string;
+  amount_native: number;
+  guard_rule_id?: string;
+}
+
+export interface UnsignedTx {
+  protocol: string;
+  wallet: string;
+  amount_native: number;
+  mint: string;
+  tx_base64: string;
+  last_valid_block_height: number;
+}
+
+export interface BuildRepayResponse {
+  intent_id: string;
+  unsigned: UnsignedTx;
+}
+
+export type IntentStatus =
+  | 'pending'
+  | 'signed'
+  | 'submitted'
+  | 'confirmed'
+  | 'expired'
+  | 'cancelled';
+
+export interface IntentRow {
+  id: string;
+  protocol: string;
+  mint: string;
+  amount_native: number;
+  status: IntentStatus;
+  signature: string | null;
+  created_at: string;
+  expires_at: string;
 }
 
 export interface AlertRecordWire {

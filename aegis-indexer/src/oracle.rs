@@ -20,6 +20,23 @@ use crate::grpc::{KAMINO_PROGRAM_ID, MARGINFI_V2_PROGRAM_ID};
 /// 8-byte Anchor discriminator for Marginfi Bank accounts.
 const MARGINFI_BANK_DISCRIMINATOR: [u8; 8] = [142, 49, 166, 242, 50, 66, 97, 188];
 
+/// Canonical mainnet mints we always want priced — regardless of whether a
+/// lending-protocol reserve happens to reference them. Keeps the ticker rail
+/// and any future UI lookup (e.g. "what's USDC worth?") reliable even when
+/// Jupiter skips a mint on partial-response chunks.
+const SEED_MINTS: &[&str] = &[
+    "So11111111111111111111111111111111111111112", // SOL (wSOL)
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
+    "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", // BONK
+    "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", // WIF
+    "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",  // JUP
+    "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3", // PYTH
+    "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",  // JitoSOL
+    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",   // mSOL
+    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",   // bSOL
+];
+
 /// Fetches all Marginfi Banks and Kamino Reserves, extracts their token mints,
 /// and stores the (bank/reserve pubkey → mint) mapping in `state.token_mints`.
 ///
@@ -148,9 +165,18 @@ pub async fn discover_mints(
         kamino_accounts.len()
     );
 
+    // Union in seed mints so canonical stables/LSTs always get polled, even
+    // if for some reason they didn't show up in any discovered bank/reserve.
+    let discovered = mint_pubkeys.len();
+    for m in SEED_MINTS {
+        mint_pubkeys.insert((*m).to_string());
+    }
+
     info!(
-        "Oracle discovery complete: {} unique token mints from {} accounts",
+        "Oracle discovery complete: {} unique token mints ({} discovered + {} seeded) from {} accounts",
         mint_pubkeys.len(),
+        discovered,
+        mint_pubkeys.len() - discovered,
         marginfi_mapped + kamino_mapped
     );
 
@@ -161,47 +187,78 @@ pub async fn discover_mints(
 /// Background task: polls Jupiter Price API v3 every 10 seconds for all known token mints.
 /// Writes prices into `state.token_prices` (DashMap<mint, f64>).
 pub async fn start_jupiter_poller(state: Arc<crate::state::AppState>, mints: Vec<String>) {
-    let client = reqwest::Client::new();
-    // Jupiter allows up to 100 token IDs per request
-    let chunks: Vec<Vec<String>> = mints.chunks(100).map(|c| c.to_vec()).collect();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .expect("reqwest client");
 
-    info!("Jupiter poller started for {} tokens", mints.len());
+    // Jupiter /price/v3 nominally allows 100 mints per GET, but at that
+    // size the URL crosses 4KB and some chunks return partial responses
+    // (observed USDC + SOL dropping out repeatedly). 50 is the sweet spot.
+    const CHUNK_SIZE: usize = 50;
+    let chunks: Vec<Vec<String>> = mints.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
+
+    info!(
+        "Jupiter poller started for {} tokens across {} chunks of {}",
+        mints.len(),
+        chunks.len(),
+        CHUNK_SIZE
+    );
 
     loop {
         let mut prices_updated = 0;
+        let mut chunks_failed = 0;
 
-        for chunk in &chunks {
+        for (chunk_idx, chunk) in chunks.iter().enumerate() {
             let ids = chunk.join(",");
             let url = format!("https://api.jup.ag/price/v3?ids={}", ids);
 
-            match client.get(&url).send().await {
-                Ok(resp) => {
-                    // Parse as generic JSON to handle tokens with null/missing usdPrice
-                    match resp.json::<serde_json::Value>().await {
-                        Ok(json) => {
-                            if let Some(map) = json.as_object() {
-                                for (mint, token_data) in map {
-                                    if let Some(price) = token_data.get("usdPrice").and_then(|v| v.as_f64()) {
-                                        state.token_prices.insert(mint.clone(), price);
-                                        prices_updated += 1;
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Jupiter: failed to parse response: {}", e);
-                        }
+            let result = async {
+                let resp = client.get(&url).send().await?;
+                let status = resp.status();
+                if !status.is_success() {
+                    return Err(anyhow::anyhow!("HTTP {} on chunk {}", status, chunk_idx));
+                }
+                let json: serde_json::Value = resp.json().await?;
+                let map = json
+                    .as_object()
+                    .ok_or_else(|| anyhow::anyhow!("non-object response on chunk {}", chunk_idx))?;
+                let mut updated = 0;
+                for (mint, token_data) in map {
+                    if let Some(price) =
+                        token_data.get("usdPrice").and_then(|v| v.as_f64())
+                    {
+                        state.token_prices.insert(mint.clone(), price);
+                        updated += 1;
+                    }
+                    if let Some(ch) =
+                        token_data.get("priceChange24h").and_then(|v| v.as_f64())
+                    {
+                        state.token_price_changes.insert(mint.clone(), ch);
                     }
                 }
+                Ok::<_, anyhow::Error>(updated)
+            }
+            .await;
+
+            match result {
+                Ok(n) => prices_updated += n,
                 Err(e) => {
-                    tracing::error!("Jupiter API error: {}", e);
+                    chunks_failed += 1;
+                    tracing::warn!("jupiter chunk {} failed: {}", chunk_idx, e);
                 }
             }
+
+            // Polite pacing between chunks — Jupiter's public tier rate-limits.
+            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
         }
 
-        if prices_updated > 0 {
-            tracing::debug!("Jupiter: updated {} token prices", prices_updated);
-        }
+        tracing::info!(
+            "jupiter cycle: {} prices, {} chunks failed, cache={}",
+            prices_updated,
+            chunks_failed,
+            state.token_prices.len()
+        );
 
         tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
     }

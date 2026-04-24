@@ -8,6 +8,7 @@ aegis-core = { path = "../aegis-core" }
 aegis-risk = { path = "../aegis-risk" }
 aegis-alerts = { path = "../aegis-alerts" }
 aegis-indexer = { path = "../aegis-indexer" }
+aegis-executor = { path = "../aegis-executor" }
 axum = { workspace = true }
 tower-http = { workspace = true }
 tokio = { workspace = true }

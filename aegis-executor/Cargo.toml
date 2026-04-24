@@ -1,0 +1,20 @@
+[package]
+name = "aegis-executor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aegis-core = { path = "../aegis-core" }
+solana-sdk = { workspace = true }
+solana-client = { workspace = true }
+klend-sdk = { workspace = true }
+carbon-marginfi-v2-decoder = { workspace = true }
+borsh = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true }
+tokio = { workspace = true }
+base64 = "0.22"
+bincode = "1.3"
