@@ -55,9 +55,6 @@ export const walletRiskToHealth = (risk: WalletRisk): HealthSnapshot => {
   const updatedAt = new Date().toISOString();
   for (const p of risk.positions) {
     const protocol = normalizeProtocol(p.protocol);
-    // Prefer per-asset legs when the backend supplied them — that unlocks
-    // per-leg repay. Fall back to USD aggregates when legs are absent
-    // (e.g. Save parser today emits aggregates only).
     if (p.legs && p.legs.length > 0) {
       for (const leg of p.legs) {
         positions.push({
@@ -70,8 +67,6 @@ export const walletRiskToHealth = (risk: WalletRisk): HealthSnapshot => {
           amount: leg.amount_ui,
           value_usd: leg.value_usd,
           updated_at: updatedAt,
-          reserve_or_bank: leg.reserve_or_bank,
-          amount_native: leg.amount_native,
         });
       }
       continue;

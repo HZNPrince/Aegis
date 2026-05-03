@@ -1,11 +1,7 @@
 // Typed API client — thin fetch wrapper; paths are relative to API_URL.
 import type {
   AlertRecordWire,
-  BuildRepayBody,
-  BuildRepayResponse,
   GuardRuleWire,
-  IntentRow,
-  IntentStatus,
   ScenarioRequest,
   ScenarioResponse,
   SystemStatus,
@@ -53,20 +49,6 @@ export const api = {
     request<ScenarioResponse>('/api/scenario', {
       method: 'POST',
       body: JSON.stringify(req),
-    }),
-  buildRepay: (body: BuildRepayBody) =>
-    request<BuildRepayResponse>('/api/execute/repay', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-  listIntents: (wallet: string) => request<IntentRow[]>(`/api/intents/${wallet}`),
-  updateIntent: (
-    intentId: string,
-    body: { status: IntentStatus; signature?: string; error?: string },
-  ) =>
-    request<void>(`/api/intents/${intentId}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify(body),
     }),
   getWalletSettings: (wallet: string) =>
     request<{ telegram_chat_id: number | null }>(`/api/wallets/${wallet}`),

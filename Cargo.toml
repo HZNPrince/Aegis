@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["aegis-alerts", "aegis-api", "aegis-bot","aegis-core", "aegis-executor", "aegis-indexer", "aegis-risk", "aegis-server", "raydium_indexing"]
+members = ["aegis-alerts", "aegis-api", "aegis-bot","aegis-core", "aegis-indexer", "aegis-risk", "aegis-server", "raydium_indexing"]
 
 [workspace.dependencies]
 tokio = { version = "1.50.0", features = ["full"]}
@@ -23,7 +23,7 @@ solana-account-decoder = "3.1.11"
 yellowstone-grpc-client = "12.2.0"
 yellowstone-grpc-proto = "12.1.0"
 
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "chrono", "uuid"]}
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "chrono", "uuid", "migrate"]}
 
 axum = "0.8.8"
 reqwest = { version = "0.13.2", features = ["json"]}
