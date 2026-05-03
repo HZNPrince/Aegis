@@ -43,30 +43,19 @@ impl Dispatcher for LogDispatcher {
     }
 }
 
-/// Sends alerts to a single Telegram chat via the Bot API. For MVP this
-/// is one global admin chat — every alert for every monitored wallet lands
-/// there. Multi-user fan-out becomes a `wallets.telegram_chat_id` column
-/// later without touching this dispatcher.
+/// Sends alerts to each wallet's linked Telegram chat via the Bot API.
+/// If the wallet has no `telegram_chat_id` set, the alert is silently skipped —
+/// we never fall back to an admin chat.
 pub struct TelegramDispatcher {
     http: reqwest::Client,
     token: String,
-    chat_id: String,
 }
 
 impl TelegramDispatcher {
-    /// Returns `None` when either env var is missing so the server can
-    /// register it conditionally without panicking in local dev.
+    /// Returns `None` only when `TELEGRAM_BOT_TOKEN` is missing.
     pub fn from_env() -> Option<Self> {
         let token = std::env::var("TELEGRAM_BOT_TOKEN").ok().filter(|v| !v.is_empty())?;
-        let chat_id = std::env::var("TG_CHAT_ID")
-            .ok()
-            .or_else(|| std::env::var("TELEGRAM_ADMIN_CHAT_ID").ok())
-            .filter(|v| !v.is_empty())?;
-        Some(Self {
-            http: reqwest::Client::new(),
-            token,
-            chat_id,
-        })
+        Some(Self { http: reqwest::Client::new(), token })
     }
 }
 
@@ -77,6 +66,10 @@ impl Dispatcher for TelegramDispatcher {
     }
 
     async fn send(&self, alert: &AlertRecord) -> anyhow::Result<()> {
+        let Some(chat_id) = alert.telegram_chat_id else {
+            return Ok(());
+        };
+
         let url = format!("https://api.telegram.org/bot{}/sendMessage", self.token);
         let text = format_alert_markdown(alert);
 
@@ -84,7 +77,7 @@ impl Dispatcher for TelegramDispatcher {
             .http
             .post(&url)
             .json(&serde_json::json!({
-                "chat_id": self.chat_id,
+                "chat_id": chat_id,
                 "text": text,
                 "parse_mode": "Markdown",
                 "disable_web_page_preview": true,
@@ -113,9 +106,15 @@ fn format_alert_markdown(alert: &AlertRecord) -> String {
         alert.wallet.clone()
     };
 
+    let severity_label = match alert.severity {
+        AlertSeverity::Critical => "Critical",
+        AlertSeverity::Warning => "Warning",
+        AlertSeverity::Info => "Info",
+    };
     let mut out = format!(
-        "{} *{:?}* — {}\n\n*Wallet:* `{}`\n*Health:* {:.1}/100   *LTV:* {:.3}\n\n{}",
-        emoji, alert.severity, alert.title, short_wallet, alert.health_score, alert.ltv, alert.message,
+        "{} *{}* — {}\n\n*Wallet:* `{}`\n*Health:* {:.0}/100   *LTV:* {:.1}%\n\n{}",
+        emoji, severity_label, alert.title, short_wallet,
+        alert.health_score, alert.ltv * 100.0, alert.message,
     );
     if !alert.suggested_actions.is_empty() {
         out.push_str("\n\n*Suggested:*");
@@ -126,9 +125,7 @@ fn format_alert_markdown(alert: &AlertRecord) -> String {
     out
 }
 
-/// Fan one alert out to every dispatcher. Called by the engine after the
-/// alert is persisted. A failure in one channel must not block the others,
-/// so we log and continue.
+/// Fan one alert out to every dispatcher; failures are logged but don't block other channels.
 pub async fn broadcast(dispatchers: &[std::sync::Arc<dyn Dispatcher>], alert: &AlertRecord) {
     for d in dispatchers {
         if let Err(e) = d.send(alert).await {

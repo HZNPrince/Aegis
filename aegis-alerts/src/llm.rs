@@ -1,5 +1,4 @@
-use aegis_core::types::{AlertRecord, AlertSeverity};
-use aegis_risk::health::WalletRisk;
+use aegis_core::types::{AlertRecord, AlertSeverity, WalletRisk};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -89,15 +88,37 @@ impl LlmClient {
 }
 
 pub fn build_prompt(risk: &WalletRisk) -> String {
+    let mut pos_lines = Vec::new();
+    for pos in &risk.positions {
+        for leg in &pos.legs {
+            let side = match leg.side {
+                aegis_core::types::PositionSide::Collateral => "Collateral",
+                aegis_core::types::PositionSide::Borrow => "Borrow",
+            };
+            pos_lines.push(format!(
+                "{} {} {} ${:.2}",
+                pos.protocol, leg.asset_symbol, side, leg.value_usd
+            ));
+        }
+        if pos.legs.is_empty() {
+            if pos.collateral_usd > 0.0 {
+                pos_lines.push(format!("{} (Collateral) ${:.2}", pos.protocol, pos.collateral_usd));
+            }
+            if pos.debt_usd > 0.0 {
+                pos_lines.push(format!("{} (Borrow) ${:.2}", pos.protocol, pos.debt_usd));
+            }
+        }
+    }
+
     format!(
-        "Wallet: {}\nHealth score: {:.2}\nLTV: {:.4}\nCollateral USD: {:.2}\nDebt USD: {:.2}\nLiquidation buffer USD: {:.2}\nProtocols: {}\nReturn JSON {{\"severity\": \"Info|Warning|Critical\", \"title\": string, \"message\": string, \"suggested_actions\": string[]}}.",
+        "Solana DeFi wallet risk summary:\nWallet: {}\nHealth: {:.1}/100  LTV: {:.1}%  Buffer: ${:.2}\nCollateral: ${:.2}  Debt: ${:.2}\nPositions:\n{}\n\nReturn JSON {{\"severity\": \"Info|Warning|Critical\", \"title\": string (≤60 chars), \"message\": string (1-2 sentences, mention specific assets), \"suggested_actions\": string[] (≤3 items)}}.",
         risk.wallet,
         risk.health_score,
-        risk.ltv,
+        risk.ltv * 100.0,
+        risk.liquidation_buffer_usd,
         risk.total_collateral_usd,
         risk.total_debt_usd,
-        risk.liquidation_buffer_usd,
-        serde_json::to_string(&risk.protocols).unwrap_or_else(|_| "[]".to_string())
+        if pos_lines.is_empty() { "none".to_string() } else { pos_lines.join("\n") }
     )
 }
 
@@ -149,5 +170,6 @@ pub fn into_alert_record(risk: WalletRisk, payload: AlertPayload) -> AlertRecord
             "liquidation_buffer_usd": risk.liquidation_buffer_usd,
         }),
         created_at: None,
+        telegram_chat_id: None,
     }
 }

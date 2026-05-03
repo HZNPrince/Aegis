@@ -25,16 +25,15 @@ export function Simulator() {
   const BASE_BORROW = base.protocol_ltvs.reduce((s, p) => s + p.total_borrow_usd, 0);
   const BASE_LTV = BASE_COLL > 0 ? BASE_BORROW / BASE_COLL : 0;
 
-  const [solDelta, setSolDelta] = useState(0);
+  const [collDelta, setCollDelta] = useState(0);
+  const [debtDelta, setDebtDelta] = useState(0);
   const [addColl, setAddColl] = useState(0);
   const [repayDebt, setRepayDebt] = useState(0);
   const [breached, setBreached] = useState<boolean | null>(null);
 
-  const computeScore = (solD: number, addC: number, repayD: number): number => {
-    const collChange = BASE_COLL * (solD / 100) + addC;
-    const borrowChange = -repayD;
-    const newCollateral = BASE_COLL + collChange;
-    const newBorrow = BASE_BORROW + borrowChange;
+  const computeScore = (collD: number, debtD: number, addC: number, repayD: number): number => {
+    const newCollateral = BASE_COLL * (1 + collD / 100) + addC;
+    const newBorrow = BASE_BORROW * (1 + debtD / 100) - repayD;
     if (newCollateral <= 0) return 0;
     const newLtv = newBorrow / newCollateral;
     const avgThreshold = 0.75;
@@ -42,11 +41,11 @@ export function Simulator() {
     return Math.max(0, Math.min(100, Math.round(base.health_score + buffer * 60)));
   };
 
-  const simScore = computeScore(solDelta, addColl, repayDebt);
-  const delta = simScore - base.health_score;
+  const simScore = computeScore(collDelta, debtDelta, addColl, repayDebt);
+  const delta = simScore - Math.round(base.health_score);
 
-  const newCollTotal = BASE_COLL + BASE_COLL * (solDelta / 100) + addColl;
-  const newBorrTotal = BASE_BORROW - repayDebt;
+  const newCollTotal = BASE_COLL * (1 + collDelta / 100) + addColl;
+  const newBorrTotal = BASE_BORROW * (1 + debtDelta / 100) - repayDebt;
 
   const computing = scenario.isPending;
 
@@ -55,8 +54,8 @@ export function Simulator() {
       scenario.mutate(
         {
           wallet,
-          collateral_shock_pct: solDelta / 100,
-          debt_shock_pct: 0,
+          collateral_shock_pct: collDelta / 100,
+          debt_shock_pct: debtDelta / 100,
           protocol_overrides: {},
         },
         { onSuccess: (res) => setBreached(res.breached) },
@@ -99,14 +98,24 @@ export function Simulator() {
             <SectionLabel>Adjust scenario</SectionLabel>
 
             <SimSlider
-              label="SOL price"
-              value={solDelta}
+              label="Collateral value ±"
+              value={collDelta}
               min={-60}
               max={60}
               step={1}
               format={(v) => `${v > 0 ? '+' : ''}${v}%`}
-              color={solDelta >= 0 ? '#7DA87B' : '#D9604E'}
-              onChange={setSolDelta}
+              color={collDelta >= 0 ? '#7DA87B' : '#D9604E'}
+              onChange={setCollDelta}
+            />
+            <SimSlider
+              label="Debt value ±"
+              value={debtDelta}
+              min={-60}
+              max={60}
+              step={1}
+              format={(v) => `${v > 0 ? '+' : ''}${v}%`}
+              color={debtDelta <= 0 ? '#7DA87B' : '#D9604E'}
+              onChange={setDebtDelta}
             />
             <SimSlider
               label="Add collateral"
@@ -170,7 +179,8 @@ export function Simulator() {
 
             <button
               onClick={() => {
-                setSolDelta(0);
+                setCollDelta(0);
+                setDebtDelta(0);
                 setAddColl(0);
                 setRepayDebt(0);
                 setBreached(null);

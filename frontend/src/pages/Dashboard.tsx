@@ -14,7 +14,7 @@ import {
   SidePill,
   Skeleton,
 } from '../components/ui';
-import { useAlerts, useHealth, useIntents, useRepayIntent, useCancelIntent } from '../hooks';
+import { useAlerts, useHealth, useIntents, useRepayIntent, useCancelIntent, useTicker } from '../hooks';
 import { MOCK_ALERTS, MOCK_HEALTH } from '../mockData';
 import type { Alert, IntentRow, Position, ProtocolLtv } from '../types';
 import { alertWireToAlert, fmtUsd, timeAgo, truncAddr, walletRiskToHealth } from '../utils';
@@ -27,6 +27,7 @@ export function Dashboard() {
   const healthQ = useHealth(useLive ? wallet : null);
   const alertsQ = useAlerts(useLive ? wallet : null);
   const intentsQ = useIntents(useLive ? wallet : null);
+  const tickerQ = useTicker();
 
   const data = useMemo(
     () => (useLive && healthQ.data ? walletRiskToHealth(healthQ.data) : MOCK_HEALTH),
@@ -227,16 +228,41 @@ export function Dashboard() {
                     <td style={{ padding: '14px 16px' }}>
                       <ProtocolBadge protocol={pos.protocol} />
                     </td>
-                    <td
-                      style={{
-                        padding: '14px 16px',
-                        fontFamily: "'Inter', sans-serif",
-                        fontSize: 14,
-                        fontWeight: 600,
-                        color: '#F5F4EF',
-                      }}
-                    >
-                      {pos.asset_symbol}
+                    <td style={{ padding: '14px 16px' }}>
+                      <div
+                        style={{
+                          fontFamily: "'Inter', sans-serif",
+                          fontSize: 14,
+                          fontWeight: 600,
+                          color: '#F5F4EF',
+                        }}
+                      >
+                        {pos.asset_symbol}
+                      </div>
+                      {pos.asset_mint && tickerQ.data?.[pos.asset_mint] && (
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginTop: 2 }}>
+                          <span
+                            style={{
+                              fontFamily: "'JetBrains Mono', monospace",
+                              fontSize: 11,
+                              color: 'rgba(245,244,239,0.35)',
+                            }}
+                          >
+                            ${tickerQ.data[pos.asset_mint].price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                          </span>
+                          {tickerQ.data[pos.asset_mint].change_24h !== null && (
+                            <span
+                              style={{
+                                fontFamily: "'Inter', sans-serif",
+                                fontSize: 10,
+                                color: (tickerQ.data[pos.asset_mint].change_24h ?? 0) >= 0 ? '#7DA87B' : '#D9604E',
+                              }}
+                            >
+                              {(tickerQ.data[pos.asset_mint].change_24h ?? 0) >= 0 ? '▲' : '▼'}{Math.abs(tickerQ.data[pos.asset_mint].change_24h ?? 0).toFixed(2)}%
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: '14px 16px' }}>
                       <SidePill side={pos.side} />

@@ -52,6 +52,11 @@ impl ProtocolParser for MarginfiParser {
         let mut total_debt_usd = 0.0;
         let mut legs: Vec<PositionLeg> = Vec::with_capacity(active_balances.len() * 2);
 
+        // USD-weighted liquidation threshold from per-bank maintenance weights.
+        // Effective threshold per bank = asset_weight_maint / liability_weight_maint.
+        let mut weighted_threshold_sum = 0.0_f64;
+        let mut total_collateral_weight = 0.0_f64;
+
         for balance in &active_balances {
             let bank_pk = balance.bank_pk.to_string();
 
@@ -86,6 +91,12 @@ impl ProtocolParser for MarginfiParser {
             total_collateral_usd += deposit_usd;
             total_debt_usd += borrow_usd;
 
+            if deposit_usd > 0.0 && bank.liability_weight_maint > 0.0 {
+                let threshold = bank.asset_weight_maint / bank.liability_weight_maint;
+                weighted_threshold_sum += deposit_usd * threshold;
+                total_collateral_weight += deposit_usd;
+            }
+
             let symbol = symbol_or_short(&bank.mint);
 
             if deposit_native_f > 0.0 {
@@ -112,6 +123,12 @@ impl ProtocolParser for MarginfiParser {
             }
         }
 
+        let liquidation_threshold = if total_collateral_weight > 0.0 {
+            weighted_threshold_sum / total_collateral_weight
+        } else {
+            aegis_core::types::default_liquidation_threshold()
+        };
+
         Some(PositionUpdate {
             pubkey: pubkey.to_string(),
             owner: account.authority.to_string(),
@@ -120,6 +137,7 @@ impl ProtocolParser for MarginfiParser {
             debt_usd: total_debt_usd,
             slot,
             legs,
+            liquidation_threshold,
         })
     }
 }

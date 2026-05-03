@@ -118,7 +118,7 @@ pub async fn link_wallet(
 pub async fn wallet_health(
     State(state): State<Arc<AppState>>,
     Path(wallet): Path<String>,
-) -> Json<aegis_risk::health::WalletRisk> {
+) -> Json<aegis_core::types::WalletRisk> {
     Json(wallet_risk(&state, &wallet))
 }
 
@@ -169,6 +169,8 @@ pub async fn list_guard_rules(
         .map_err(internal_error)
 }
 
+/// Upsert a guard rule: UPDATE if an `id` is present, INSERT otherwise.
+/// Returns the full persisted row so the frontend can sync its local id.
 pub async fn upsert_guard_rule(
     State(state): State<Arc<AppState>>,
     Json(rule): Json<GuardRule>,
@@ -250,6 +252,7 @@ fn map_alert_record(row: sqlx::postgres::PgRow) -> anyhow::Result<AlertRecord> {
         suggested_actions: suggested_actions.0,
         metadata: metadata.0,
         created_at: row.try_get("created_at")?,
+        telegram_chat_id: None,
     })
 }
 
@@ -266,6 +269,7 @@ fn trigger_kind_db(kind: TriggerKind) -> &'static str {
         TriggerKind::HealthBelow => "health_below",
         TriggerKind::LtvAbove => "ltv_above",
         TriggerKind::DebtAboveUsd => "debt_above_usd",
+        TriggerKind::HealthDropped => "health_dropped",
     }
 }
 
@@ -369,6 +373,9 @@ pub struct UpdateIntentBody {
     pub error: Option<String>,
 }
 
+/// Advance an intent's lifecycle state. `pending` is not in ALLOWED — only
+/// the server sets that on creation. COALESCE keeps the existing signature/error
+/// when the caller passes null, so submitted→confirmed doesn't wipe the sig.
 pub async fn update_intent(
     State(state): State<Arc<AppState>>,
     Path(intent_id): Path<String>,
@@ -442,6 +449,245 @@ pub async fn list_intents(
         .map_err(internal_error)?;
 
     Ok(Json(items))
+}
+
+/// Reverse-lookup: given a Telegram chat_id, return the wallet pubkey linked to it.
+/// Used by the bot's /status command so the user doesn't have to type their wallet.
+#[derive(Serialize)]
+pub struct ChatLookupResponse {
+    pub wallet: String,
+}
+
+pub async fn wallet_by_chat(
+    State(state): State<Arc<AppState>>,
+    Path(chat_id): Path<i64>,
+) -> Result<Json<ChatLookupResponse>, (StatusCode, String)> {
+    let row = sqlx::query(
+        "SELECT pubkey FROM wallets WHERE telegram_chat_id = $1 LIMIT 1",
+    )
+    .bind(chat_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "no wallet linked to this chat".to_string()));
+    };
+
+    let wallet: String = row.try_get("pubkey").map_err(internal_error)?;
+    Ok(Json(ChatLookupResponse { wallet }))
+}
+
+/// Returns persisted wallet settings (telegram_chat_id, etc.) so the UI can pre-populate fields.
+#[derive(Serialize)]
+pub struct WalletSettings {
+    pub telegram_chat_id: Option<i64>,
+}
+
+pub async fn get_wallet_settings(
+    State(state): State<Arc<AppState>>,
+    Path(wallet): Path<String>,
+) -> Result<Json<WalletSettings>, (StatusCode, String)> {
+    let row = sqlx::query("SELECT telegram_chat_id FROM wallets WHERE pubkey = $1")
+        .bind(&wallet)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(internal_error)?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "wallet not found".to_string()));
+    };
+
+    let telegram_chat_id: Option<i64> = row.try_get("telegram_chat_id").unwrap_or(None);
+    Ok(Json(WalletSettings { telegram_chat_id }))
+}
+
+/// Link a Telegram chat ID to a wallet for per-wallet alert delivery.
+/// Called by the aegis-bot after the user sends /link <wallet_pubkey>.
+#[derive(serde::Deserialize)]
+pub struct LinkTelegramBody {
+    pub chat_id: i64,
+}
+
+pub async fn link_telegram(
+    State(state): State<Arc<AppState>>,
+    Path(wallet): Path<String>,
+    Json(body): Json<LinkTelegramBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // Only allow linking if no chat_id is set yet (prevents spoofing another wallet).
+    let existing = sqlx::query(
+        "SELECT telegram_chat_id FROM wallets WHERE pubkey = $1",
+    )
+    .bind(&wallet)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    let Some(row) = existing else {
+        return Err((StatusCode::NOT_FOUND, "wallet not found".to_string()));
+    };
+
+    let current: Option<i64> = row.try_get("telegram_chat_id").unwrap_or(None);
+    if current.is_some() {
+        // Already linked — allow re-link to the same chat (idempotent) but block others.
+        if current != Some(body.chat_id) {
+            return Err((StatusCode::CONFLICT, "wallet already linked to a different chat".to_string()));
+        }
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    sqlx::query(
+        "UPDATE wallets SET telegram_chat_id = $1 WHERE pubkey = $2",
+    )
+    .bind(body.chat_id)
+    .bind(&wallet)
+    .execute(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    // Send a rich welcome message with current positions — non-fatal if bot token is missing.
+    if let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") {
+        let risk = wallet_risk(&state, &wallet);
+        let text = format_welcome_message(&wallet, &risk);
+        let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
+        if let Err(e) = reqwest::Client::new()
+            .post(&url)
+            .json(&serde_json::json!({
+                "chat_id": body.chat_id,
+                "text": text,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": true,
+            }))
+            .send()
+            .await
+        {
+            error!("telegram welcome message failed: {}", e);
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete a guard rule by ID. The frontend delete button calls this.
+pub async fn delete_guard_rule(
+    State(state): State<Arc<AppState>>,
+    Path(rule_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let result = sqlx::query("DELETE FROM guard_rules WHERE id = $1::uuid")
+        .bind(&rule_id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(internal_error)?;
+
+    if result.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "rule not found".to_string()));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Link an email address to a wallet for future email notifications.
+#[derive(serde::Deserialize)]
+pub struct LinkEmailBody {
+    pub email: String,
+}
+
+pub async fn link_email(
+    State(state): State<Arc<AppState>>,
+    Path(wallet): Path<String>,
+    Json(body): Json<LinkEmailBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let exists = sqlx::query("SELECT 1 FROM wallets WHERE pubkey = $1")
+        .bind(&wallet)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(internal_error)?;
+
+    if exists.is_none() {
+        return Err((StatusCode::NOT_FOUND, "wallet not found".to_string()));
+    }
+    sqlx::query("UPDATE wallets SET email = $1 WHERE pubkey = $2")
+        .bind(&body.email)
+        .bind(&wallet)
+        .execute(&state.db_pool)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn format_welcome_message(wallet: &str, risk: &aegis_core::types::WalletRisk) -> String {
+    let short = |w: &str| {
+        if w.len() > 12 {
+            format!("{}…{}", &w[..4], &w[w.len() - 4..])
+        } else {
+            w.to_string()
+        }
+    };
+
+    let mut lines = vec![
+        "🛡️ *Aegis connected!*".to_string(),
+        String::new(),
+        format!("📍 *Wallet:* `{}`", short(wallet)),
+    ];
+
+    // Build per-leg position list from all positions.
+    let mut position_lines: Vec<String> = Vec::new();
+    for pos in &risk.positions {
+        if pos.legs.is_empty() {
+            // Aggregate fallback (no per-asset breakdown).
+            if pos.collateral_usd > 0.0 {
+                position_lines.push(format!(
+                    "• {} · (Collateral) — *${:.2}*",
+                    pos.protocol, pos.collateral_usd
+                ));
+            }
+            if pos.debt_usd > 0.0 {
+                position_lines.push(format!(
+                    "• {} · (Borrow) — *${:.2}*",
+                    pos.protocol, pos.debt_usd
+                ));
+            }
+        } else {
+            for leg in &pos.legs {
+                let side = match leg.side {
+                    aegis_core::types::PositionSide::Collateral => "Collateral",
+                    aegis_core::types::PositionSide::Borrow => "Borrow",
+                };
+                let usd = if leg.value_usd > 0.0 {
+                    format!("*${:.2}*", leg.value_usd)
+                } else {
+                    format!("{:.4} {}", leg.amount_ui, leg.asset_symbol)
+                };
+                position_lines.push(format!(
+                    "• {} · {} ({}) — {}",
+                    pos.protocol, leg.asset_symbol, side, usd
+                ));
+            }
+        }
+    }
+
+    let n = position_lines.len();
+    lines.push(format!("📊 *{} position{} found:*", n, if n == 1 { "" } else { "s" }));
+    lines.push(String::new());
+    lines.extend(position_lines);
+    lines.push(String::new());
+
+    let health_emoji = if risk.health_score >= 65.0 { "💚" } else if risk.health_score >= 40.0 { "⚠️" } else { "🔴" };
+    lines.push(format!(
+        "{} *Health:* {:.0}/100   *LTV:* {:.1}%   *Buffer:* ${:.2}",
+        health_emoji,
+        risk.health_score,
+        risk.ltv * 100.0,
+        risk.liquidation_buffer_usd
+    ));
+    lines.push(String::new());
+    lines.push("You'll receive alerts here for:".to_string());
+    lines.push("• Sudden health drops".to_string());
+    lines.push("• LTV approaching liquidation".to_string());
+    lines.push("• Collateral price movements".to_string());
+
+    lines.join("\n")
 }
 
 fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {

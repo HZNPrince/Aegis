@@ -1,3 +1,4 @@
+import { useWallet } from '@solana/wallet-adapter-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ShieldIcon } from './ShieldIcon';
 import { WalletChip } from './ui';
@@ -18,6 +19,8 @@ const LINKS: { to: string; label: string }[] = [
 export function Nav({ connected, onConnect }: Props) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const { publicKey } = useWallet();
+  const walletAddr = publicKey?.toBase58() ?? '';
 
   return (
     <nav
@@ -95,7 +98,7 @@ export function Nav({ connected, onConnect }: Props) {
         })}
       <div style={{ flex: 1 }} />
       {connected ? (
-        <WalletChip onClick={() => navigate('/settings')} />
+        <WalletChip wallet={walletAddr} onClick={() => navigate('/settings')} />
       ) : (
         <button
           onClick={onConnect}

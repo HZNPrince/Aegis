@@ -13,9 +13,10 @@ use solana_client::{
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tracing::info;
+use std::time::Duration;
+use tracing::{info, warn};
 
-use crate::grpc::{KAMINO_PROGRAM_ID, MARGINFI_V2_PROGRAM_ID};
+use crate::grpc::{KAMINO_PROGRAM_ID, MARGINFI_V2_PROGRAM_ID, SAVE_PROGRAM_ID};
 
 /// 8-byte Anchor discriminator for Marginfi Bank accounts.
 const MARGINFI_BANK_DISCRIMINATOR: [u8; 8] = [142, 49, 166, 242, 50, 66, 97, 188];
@@ -30,11 +31,11 @@ const SEED_MINTS: &[&str] = &[
     "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", // USDT
     "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", // BONK
     "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm", // WIF
-    "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",  // JUP
+    "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", // JUP
     "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3", // PYTH
-    "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",  // JitoSOL
-    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",   // mSOL
-    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",   // bSOL
+    "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", // JitoSOL
+    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So", // mSOL
+    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1", // bSOL
 ];
 
 /// Fetches all Marginfi Banks and Kamino Reserves, extracts their token mints,
@@ -71,7 +72,8 @@ pub async fn discover_mints(
     let mut marginfi_mapped = 0;
     for (pubkey, account) in &marginfi_accounts {
         let data = &account.data;
-        if data.len() < 112 {
+        // Minimum size covers up to liability_weight_maint at offset 160..176.
+        if data.len() < 176 {
             continue;
         }
 
@@ -82,6 +84,10 @@ pub async fn discover_mints(
         //   +65: auto_padding_0 (7 bytes)
         //   +72: asset_share_value (i128, 16 bytes) — I80F48 fixed-point
         //   +88: liability_share_value (i128, 16 bytes)
+        //   +104: asset_weight_init (i128, 16 bytes)
+        //   +120: asset_weight_maint (i128, 16 bytes)
+        //   +136: liability_weight_init (i128, 16 bytes)
+        //   +152: liability_weight_maint (i128, 16 bytes)
         let mint = Pubkey::try_from(&data[8..40]).unwrap();
         let mint_str = mint.to_string();
         if mint_str == "11111111111111111111111111111111" {
@@ -89,13 +95,17 @@ pub async fn discover_mints(
         }
 
         let mint_decimals = data[40];
+        let i80f48_scale = (1u128 << 48) as f64;
+
         let asset_share_raw = i128::from_le_bytes(data[80..96].try_into().unwrap());
         let liability_share_raw = i128::from_le_bytes(data[96..112].try_into().unwrap());
-
-        // I80F48 → f64: divide by 2^48
-        let i80f48_scale = (1u128 << 48) as f64;
         let asset_share_value = asset_share_raw as f64 / i80f48_scale;
         let liability_share_value = liability_share_raw as f64 / i80f48_scale;
+
+        let asset_weight_maint_raw = i128::from_le_bytes(data[128..144].try_into().unwrap());
+        let liability_weight_maint_raw = i128::from_le_bytes(data[160..176].try_into().unwrap());
+        let asset_weight_maint = asset_weight_maint_raw as f64 / i80f48_scale;
+        let liability_weight_maint = liability_weight_maint_raw as f64 / i80f48_scale;
 
         marginfi_mapped += 1;
         let pubkey_str = pubkey.to_string();
@@ -110,6 +120,8 @@ pub async fn discover_mints(
                 mint_decimals,
                 asset_share_value,
                 liability_share_value,
+                asset_weight_maint,
+                liability_weight_maint,
             },
         );
         mint_pubkeys.insert(mint_str);
@@ -153,6 +165,8 @@ pub async fn discover_mints(
                 crate::state::ReserveData {
                     mint: mint_str.clone(),
                     mint_decimals: reserve.liquidity.mint_decimals as u8,
+                    exchange_rate: compute_kamino_exchange_rate(&reserve),
+                    liquidation_threshold_pct: reserve.config.liquidation_threshold_pct,
                 },
             );
             mint_pubkeys.insert(mint_str);
@@ -164,6 +178,13 @@ pub async fn discover_mints(
         kamino_mapped,
         kamino_accounts.len()
     );
+
+    // --- Save Reserves ---
+    let save_mints = discover_save_reserves_inner(&client, state).await?;
+    info!("Save: {} reserves mapped to mints", save_mints.len());
+    for m in save_mints {
+        mint_pubkeys.insert(m);
+    }
 
     // Union in seed mints so canonical stables/LSTs always get polled, even
     // if for some reason they didn't show up in any discovered bank/reserve.
@@ -183,6 +204,239 @@ pub async fn discover_mints(
     Ok(mint_pubkeys.into_iter().collect())
 }
 
+/// Fetch all Save reserves and upsert them into `state.save_reserve_cache`.
+/// Returns the set of liquidity mints found (for price polling).
+///
+/// Byte offsets verified against the Save (Solend-fork) on-chain reserve layout.
+/// RESERVE_LEN = 619; all reads are within bounds.
+#[allow(deprecated)]
+async fn discover_save_reserves_inner(
+    client: &RpcClient,
+    state: &Arc<crate::state::AppState>,
+) -> anyhow::Result<HashSet<String>> {
+    let config = RpcProgramAccountsConfig {
+        filters: Some(vec![RpcFilterType::DataSize(619)]),
+        account_config: RpcAccountInfoConfig {
+            encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
+            ..RpcAccountInfoConfig::default()
+        },
+        ..RpcProgramAccountsConfig::default()
+    };
+
+    let accounts = client
+        .get_program_accounts_with_config(&SAVE_PROGRAM_ID.parse().unwrap(), config)
+        .await?;
+
+    let mut mints = HashSet::new();
+
+    for (pubkey, account) in &accounts {
+        let data = &account.data;
+        if data.len() < 389 {
+            continue;
+        }
+
+        let Ok(liquidity_mint_pk) = Pubkey::try_from(&data[42..74]) else {
+            continue;
+        };
+        let liquidity_mint = liquidity_mint_pk.to_string();
+        if liquidity_mint == "11111111111111111111111111111111" {
+            continue;
+        }
+        let mint_decimals = data[74];
+
+        let available_amount = u64::from_le_bytes(data[171..179].try_into().unwrap());
+        let borrowed_amount_wads = u128::from_le_bytes(data[179..195].try_into().unwrap());
+
+        let Ok(collateral_mint_pk) = Pubkey::try_from(&data[227..259]) else {
+            continue;
+        };
+        let collateral_mint = collateral_mint_pk.to_string();
+
+        let collateral_mint_total_supply = u64::from_le_bytes(data[259..267].try_into().unwrap());
+        let liquidation_threshold_pct = data[302];
+        let accumulated_fees_wads = u128::from_le_bytes(data[373..389].try_into().unwrap());
+
+        let pubkey_str = pubkey.to_string();
+        state
+            .token_mints
+            .insert(pubkey_str.clone(), liquidity_mint.clone());
+        state.save_reserve_cache.insert(
+            pubkey_str,
+            crate::state::SaveReserveData {
+                liquidity_mint: liquidity_mint.clone(),
+                mint_decimals,
+                collateral_mint,
+                collateral_mint_total_supply,
+                available_amount,
+                borrowed_amount_wads,
+                accumulated_fees_wads,
+                liquidation_threshold_pct,
+            },
+        );
+        mints.insert(liquidity_mint);
+    }
+
+    Ok(mints)
+}
+
+/// Background task: refreshes Marginfi bank share values every 30 s.
+///
+/// Share values increase every slot as interest accrues. Without refresh,
+/// cached values drift and health scores underreport both collateral and debt.
+/// Uses in-place upsert — never clears the cache.
+#[allow(deprecated)]
+pub async fn start_bank_refresh_loop(rpc_url: String, state: Arc<crate::state::AppState>) {
+    let client = RpcClient::new(rpc_url);
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+
+        let config = RpcProgramAccountsConfig {
+            filters: Some(vec![RpcFilterType::Memcmp(Memcmp::new_raw_bytes(
+                0,
+                MARGINFI_BANK_DISCRIMINATOR.to_vec(),
+            ))]),
+            account_config: RpcAccountInfoConfig {
+                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
+                ..RpcAccountInfoConfig::default()
+            },
+            ..RpcProgramAccountsConfig::default()
+        };
+
+        match client
+            .get_program_accounts_with_config(&MARGINFI_V2_PROGRAM_ID.parse().unwrap(), config)
+            .await
+        {
+            Ok(accounts) => {
+                let mut updated = 0usize;
+                for (pubkey, account) in &accounts {
+                    let data = &account.data;
+                    if data.len() < 176 {
+                        continue;
+                    }
+                    let mint = Pubkey::try_from(&data[8..40]).unwrap();
+                    let mint_str = mint.to_string();
+                    if mint_str == "11111111111111111111111111111111" {
+                        continue;
+                    }
+                    let mint_decimals = data[40];
+                    let i80f48_scale = (1u128 << 48) as f64;
+                    let asset_share_value =
+                        i128::from_le_bytes(data[80..96].try_into().unwrap()) as f64 / i80f48_scale;
+                    let liability_share_value =
+                        i128::from_le_bytes(data[96..112].try_into().unwrap()) as f64
+                            / i80f48_scale;
+                    let asset_weight_maint = i128::from_le_bytes(data[128..144].try_into().unwrap())
+                        as f64
+                        / i80f48_scale;
+                    let liability_weight_maint =
+                        i128::from_le_bytes(data[160..176].try_into().unwrap()) as f64
+                            / i80f48_scale;
+
+                    state.bank_cache.insert(
+                        pubkey.to_string(),
+                        crate::state::BankData {
+                            mint: mint_str,
+                            mint_decimals,
+                            asset_share_value,
+                            liability_share_value,
+                            asset_weight_maint,
+                            liability_weight_maint,
+                        },
+                    );
+                    updated += 1;
+                }
+                info!("[oracle] bank refresh: {} banks updated", updated);
+            }
+            Err(e) => warn!("[oracle] bank refresh failed: {}", e),
+        }
+    }
+}
+
+/// Compute the cToken→underlying exchange rate for a Kamino reserve.
+/// exchange_rate = total_liquidity / collateral_mint_total_supply
+fn compute_kamino_exchange_rate(reserve: &Reserve) -> f64 {
+    let supply = reserve.collateral.mint_total_supply;
+    if supply == 0 {
+        return 1.0;
+    }
+    let borrowed = reserve.liquidity.borrowed_amount_sf as u128 / (1u128 << 60);
+    let fees = reserve.liquidity.accumulated_protocol_fees_sf as u128 / (1u128 << 60);
+    let available = reserve.liquidity.available_amount as u128;
+    let total_liquidity = available.saturating_add(borrowed).saturating_sub(fees);
+    total_liquidity as f64 / supply as f64
+}
+
+/// Background task: refreshes Kamino reserve exchange rates and liquidation thresholds every 30 s.
+#[allow(deprecated)]
+pub async fn start_kamino_reserve_refresh_loop(
+    rpc_url: String,
+    state: Arc<crate::state::AppState>,
+) {
+    let client = RpcClient::new(rpc_url);
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+
+        let config = RpcProgramAccountsConfig {
+            filters: Some(vec![RpcFilterType::DataSize(8624)]),
+            account_config: RpcAccountInfoConfig {
+                encoding: Some(solana_account_decoder::UiAccountEncoding::Base64),
+                ..RpcAccountInfoConfig::default()
+            },
+            ..RpcProgramAccountsConfig::default()
+        };
+
+        match client
+            .get_program_accounts_with_config(&KAMINO_PROGRAM_ID.parse().unwrap(), config)
+            .await
+        {
+            Ok(accounts) => {
+                let mut updated = 0usize;
+                for (pubkey, account) in &accounts {
+                    if let Ok(reserve) = Reserve::from_bytes(&account.data) {
+                        let mint_str = reserve.liquidity.mint_pubkey.to_string();
+                        if mint_str == "11111111111111111111111111111111" {
+                            continue;
+                        }
+                        state.reserve_cache.insert(
+                            pubkey.to_string(),
+                            crate::state::ReserveData {
+                                mint: mint_str,
+                                mint_decimals: reserve.liquidity.mint_decimals as u8,
+                                exchange_rate: compute_kamino_exchange_rate(&reserve),
+                                liquidation_threshold_pct: reserve.config.liquidation_threshold_pct,
+                            },
+                        );
+                        updated += 1;
+                    }
+                }
+                info!(
+                    "[oracle] kamino reserve refresh: {} reserves updated",
+                    updated
+                );
+            }
+            Err(e) => warn!("[oracle] kamino reserve refresh failed: {}", e),
+        }
+    }
+}
+
+/// Background task: refreshes Save reserve exchange rates every 30 s.
+///
+/// cToken→underlying exchange rates change with every interest accrual.
+/// Without refresh, `amount_native` values fed to the executor drift from reality.
+pub async fn start_save_reserve_refresh_loop(rpc_url: String, state: Arc<crate::state::AppState>) {
+    let client = RpcClient::new(rpc_url);
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+
+        match discover_save_reserves_inner(&client, &state).await {
+            Ok(n) => info!(
+                "[oracle] save reserve refresh: {} reserves updated",
+                n.len()
+            ),
+            Err(e) => warn!("[oracle] save reserve refresh failed: {}", e),
+        }
+    }
+}
 
 /// Background task: polls Jupiter Price API v3 every 10 seconds for all known token mints.
 /// Writes prices into `state.token_prices` (DashMap<mint, f64>).
@@ -194,8 +448,8 @@ pub async fn start_jupiter_poller(state: Arc<crate::state::AppState>, mints: Vec
 
     // Jupiter /price/v3 nominally allows 100 mints per GET, but at that
     // size the URL crosses 4KB and some chunks return partial responses
-    // (observed USDC + SOL dropping out repeatedly). 50 is the sweet spot.
-    const CHUNK_SIZE: usize = 50;
+    // (observed USDC + SOL dropping out repeatedly).
+    const CHUNK_SIZE: usize = 100;
     let chunks: Vec<Vec<String>> = mints.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
 
     info!(
@@ -225,15 +479,11 @@ pub async fn start_jupiter_poller(state: Arc<crate::state::AppState>, mints: Vec
                     .ok_or_else(|| anyhow::anyhow!("non-object response on chunk {}", chunk_idx))?;
                 let mut updated = 0;
                 for (mint, token_data) in map {
-                    if let Some(price) =
-                        token_data.get("usdPrice").and_then(|v| v.as_f64())
-                    {
+                    if let Some(price) = token_data.get("usdPrice").and_then(|v| v.as_f64()) {
                         state.token_prices.insert(mint.clone(), price);
                         updated += 1;
                     }
-                    if let Some(ch) =
-                        token_data.get("priceChange24h").and_then(|v| v.as_f64())
-                    {
+                    if let Some(ch) = token_data.get("priceChange24h").and_then(|v| v.as_f64()) {
                         state.token_price_changes.insert(mint.clone(), ch);
                     }
                 }
@@ -249,8 +499,8 @@ pub async fn start_jupiter_poller(state: Arc<crate::state::AppState>, mints: Vec
                 }
             }
 
-            // Polite pacing between chunks — Jupiter's public tier rate-limits.
-            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+            // Polite pacing between chunks to avoid 429 Too Many Requests
+            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
         }
 
         tracing::info!(
@@ -260,6 +510,6 @@ pub async fn start_jupiter_poller(state: Arc<crate::state::AppState>, mints: Vec
             state.token_prices.len()
         );
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
     }
 }

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::health::{WalletRisk, risk_from_positions};
-use aegis_core::types::PositionUpdate;
+use crate::health::risk_from_positions;
+use aegis_core::types::{PositionUpdate, WalletRisk};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScenarioRequest {
@@ -76,6 +76,7 @@ mod tests {
                 debt_usd: 700.0,
                 slot: 1,
                 legs: Vec::new(),
+                liquidation_threshold: aegis_core::types::default_liquidation_threshold(),
             }],
         );
 

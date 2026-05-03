@@ -12,7 +12,7 @@ export function useCountUp(target: number, duration = 1200, delay = 100): number
         const ease = 1 - Math.pow(1 - p, 3);
         setVal(Math.round(ease * target));
         if (p < 1) raf = requestAnimationFrame(step);
-        else setVal(target);
+        else setVal(Math.round(target));
       };
       raf = requestAnimationFrame(step);
     }, delay);

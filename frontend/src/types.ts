@@ -2,10 +2,10 @@ export type Protocol = 'Kamino' | 'Save' | 'Marginfi';
 export type Severity = 'Info' | 'Warning' | 'Critical';
 export type Side = 'Collateral' | 'Borrow';
 
-export type TriggerKind = 'HealthBelow' | 'LtvAbove' | 'DebtAboveUsd';
+export type TriggerKind = 'HealthBelow' | 'LtvAbove' | 'DebtAboveUsd' | 'HealthDropped';
 export type ActionKind = 'NotifyOnly' | 'AddCollateral' | 'RepayDebt' | 'Deleverage';
 
-// Mock / legacy UI shape (per-asset rows). Kept for demo mode.
+// Legacy shape for demo mode (per-asset rows).
 export interface Position {
   id: string;
   protocol: Protocol;

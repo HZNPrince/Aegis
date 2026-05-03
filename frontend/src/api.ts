@@ -1,3 +1,4 @@
+// Typed API client — thin fetch wrapper; paths are relative to API_URL.
 import type {
   AlertRecordWire,
   BuildRepayBody,
@@ -42,7 +43,7 @@ export const api = {
   health: (wallet: string) => request<WalletRisk>(`/api/health/${wallet}`),
   alerts: (wallet: string) => request<AlertRecordWire[]>(`/api/alerts/${wallet}`),
   guardRules: (wallet: string) =>
-    request<GuardRuleWire[]>(`/api/guard-rules/${wallet}`),
+    request<GuardRuleWire[]>(`/api/wallets/${wallet}/guard-rules`),
   upsertGuardRule: (rule: GuardRuleWire) =>
     request<GuardRuleWire>('/api/guard-rules', {
       method: 'POST',
@@ -66,5 +67,19 @@ export const api = {
     request<void>(`/api/intents/${intentId}/status`, {
       method: 'PATCH',
       body: JSON.stringify(body),
+    }),
+  getWalletSettings: (wallet: string) =>
+    request<{ telegram_chat_id: number | null }>(`/api/wallets/${wallet}`),
+  linkTelegram: (wallet: string, chatId: number) =>
+    request<void>(`/api/wallets/${wallet}/telegram`, {
+      method: 'PATCH',
+      body: JSON.stringify({ chat_id: chatId }),
+    }),
+  deleteGuardRule: (ruleId: string) =>
+    request<void>(`/api/guard-rules/${ruleId}`, { method: 'DELETE' }),
+  linkEmail: (wallet: string, email: string) =>
+    request<void>(`/api/wallets/${wallet}/email`, {
+      method: 'PATCH',
+      body: JSON.stringify({ email }),
     }),
 };

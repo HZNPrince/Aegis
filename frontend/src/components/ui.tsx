@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import type { Protocol, Severity, Side } from '../types';
 import { severityColor } from '../utils';
 import { useTicker } from '../hooks';
-import { MOCK_WALLET_FULL, MOCK_WALLET_SHORT } from '../mockData';
+import { truncAddr } from '../utils';
 
 // Curated ticker list: symbol → mainnet mint. Kept small + recognizable;
 // we look these up in the backend's live price cache (Jupiter-polled).
@@ -364,11 +364,11 @@ export function PriceTickerRail() {
   );
 }
 
-export function WalletChip({ onClick }: { onClick?: () => void }) {
+export function WalletChip({ wallet, onClick }: { wallet: string; onClick?: () => void }) {
   const [copied, setCopied] = useState(false);
   const copy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    void navigator.clipboard?.writeText(MOCK_WALLET_FULL);
+    void navigator.clipboard?.writeText(wallet);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -403,7 +403,7 @@ export function WalletChip({ onClick }: { onClick?: () => void }) {
           letterSpacing: '0.02em',
         }}
       >
-        {MOCK_WALLET_SHORT}
+        {truncAddr(wallet)}
       </span>
       <button
         onClick={copy}

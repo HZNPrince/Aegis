@@ -68,7 +68,7 @@ fn build_parsers(state: Arc<AppState>) -> Arc<HashMap<String, Box<dyn ProtocolPa
         KAMINO_PROGRAM_ID.to_string(),
         Box::new(KaminoParser { state: state.clone() }),
     );
-    parsers.insert(SAVE_PROGRAM_ID.to_string(), Box::new(SaveParser));
+    parsers.insert(SAVE_PROGRAM_ID.to_string(), Box::new(SaveParser { state: state.clone() }));
     parsers.insert(
         MARGINFI_V2_PROGRAM_ID.to_string(),
         Box::new(MarginfiParser { state }),
@@ -224,8 +224,16 @@ pub(crate) fn process_update(
         return;
     };
 
-    let Some(pos) = parser.try_parse(pubkey, data, slot) else {
-        return;
+    let pos = match parser.try_parse(pubkey, data, slot) {
+        Some(p) => p,
+        None => {
+            // Obligation zeroed out (full repay + withdraw) — remove stale cache entry
+            // so the position disappears from the dashboard immediately.
+            if state.positions.remove(pubkey).is_some() {
+                info!("[grpc] obligation {} zeroed, evicted from cache", &pubkey[..8.min(pubkey.len())]);
+            }
+            return;
+        }
     };
 
     if !state.monitored_wallets.contains_key(&pos.owner) {

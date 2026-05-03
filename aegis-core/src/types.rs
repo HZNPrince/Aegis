@@ -2,10 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 
-/// Which lending protocol a postion belongs to.
-///
-/// Each has different account layouts, LTV calculations and liquidation mechanics.
-/// This tag tells the risk engine which formula to apply
+/// Which lending protocol a position belongs to.
+/// Each has different account layouts, LTV calculations, and liquidation mechanics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub enum Protocol {
     Kamino,
@@ -23,8 +21,7 @@ impl std::fmt::Display for Protocol {
     }
 }
 
-/// A UNIFIED representation of a single collateral or borrow position within a lending protocol.
-/// Since each protocol stores it differently we normalize it so the risk engine dosen't care which protocol the data came from.
+/// Normalized single-asset position from any lending protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub protocol: Protocol,
@@ -32,21 +29,20 @@ pub struct Position {
     pub asset_mint: Pubkey,
     pub asset_symbol: String,
     pub side: PositionSide,
-    /// Amount in native token units ( NOT lamports - already converted)
+    /// Native token units (decimals applied; not raw lamports)
     pub amount: f64,
     /// Current USD value from oracle
     pub value_usd: f64,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PositionSide {
     Collateral,
     Borrow,
 }
 
-/// Aggregated risk view of a wallet across all protocols
-/// This is what api returns and the dashboard displays
+/// Aggregated risk view of a wallet across all protocols — returned by the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletHealth {
     pub wallet: Pubkey,
@@ -59,7 +55,7 @@ pub struct WalletHealth {
     pub computed_at: DateTime<Utc>,
 }
 
-/// per-protocol LTV breakdown
+/// Per-protocol LTV breakdown.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolLtv {
     pub protocol: Protocol,
@@ -72,38 +68,37 @@ pub struct ProtocolLtv {
 }
 
 /// Normalized position data extracted from any lending protocol account.
-/// This is what the gRPC parser produces and the DashMap stores.
+/// Produced by the gRPC parser and stored in the DashMap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionUpdate {
-    /// On-chain address of the obligation/account
+    /// On-chain address of the obligation/account.
     pub pubkey: String,
-    /// Wallet owner of this position
+    /// Wallet owner of this position.
     pub owner: String,
-    /// Protocol name: "Kamino", "Marginfi", or "SAVE"
+    /// Protocol name: "Kamino", "Marginfi", or "SAVE".
     pub protocol: String,
-    /// Total collateral value in USD (aggregate across all tokens)
+    /// Aggregate collateral value in USD.
     pub collateral_usd: f64,
-    /// Total debt value in USD (aggregate across all tokens)
+    /// Aggregate debt value in USD.
     pub debt_usd: f64,
-    /// Solana slot this update was observed at
+    /// Solana slot at which this update was observed.
     pub slot: u64,
-    /// Per-asset legs (deposit + borrow rows) required for autonomous
-    /// execution. Empty for protocols where the parser only produces
-    /// aggregates today (Kamino, Save) — the risk engine keeps working off
-    /// `collateral_usd`/`debt_usd` unchanged.
+    /// Per-asset legs (one per deposit/borrow reserve) for execution.
     #[serde(default)]
     pub legs: Vec<PositionLeg>,
+    /// USD-weighted average liquidation threshold across deposit reserves (0.0–1.0).
+    /// Falls back to 0.85 when unset.
+    #[serde(default = "default_liquidation_threshold")]
+    pub liquidation_threshold: f64,
 }
 
-/// One per-asset row inside a `PositionUpdate`. A single obligation can have
-/// multiple legs — e.g. SOL deposit + USDC borrow = two legs.
-///
-/// `amount_native` is the raw on-chain token amount (pre-decimals) that an
-/// executor feeds straight into a `transfer`/`repay` instruction without
-/// rescaling. `amount_ui` is the same value with decimals applied, for
-/// display. `reserve_or_bank` identifies the protocol-side account the
-/// executor must pass into the instruction (Marginfi bank / Kamino+Save
-/// reserve).
+pub fn default_liquidation_threshold() -> f64 {
+    0.85
+}
+
+/// One per-asset row inside a `PositionUpdate`.
+/// `amount_native` is raw on-chain units fed directly into repay instructions.
+/// `reserve_or_bank` is the protocol-side account passed to the instruction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PositionLeg {
     pub side: PositionSide,
@@ -113,6 +108,29 @@ pub struct PositionLeg {
     pub amount_ui: f64,
     pub value_usd: f64,
     pub reserve_or_bank: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtocolHealth {
+    pub protocol: String,
+    pub collateral_usd: f64,
+    pub debt_usd: f64,
+    pub ltv: f64,
+    pub liquidation_threshold: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletRisk {
+    pub wallet: String,
+    pub health_score: f64,
+    pub severity: AlertSeverity,
+    pub total_collateral_usd: f64,
+    pub total_debt_usd: f64,
+    pub ltv: f64,
+    pub liquidation_threshold: f64,
+    pub liquidation_buffer_usd: f64,
+    pub protocols: Vec<ProtocolHealth>,
+    pub positions: Vec<PositionUpdate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +145,10 @@ pub enum TriggerKind {
     HealthBelow,
     LtvAbove,
     DebtAboveUsd,
+    /// Fires when health score drops by more than `trigger_value` percentage
+    /// (0.0–1.0) in a single engine cycle relative to the last observation.
+    /// E.g. trigger_value = 0.15 → fire when health drops 15%+ since last check.
+    HealthDropped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,4 +191,7 @@ pub struct AlertRecord {
     pub suggested_actions: Vec<String>,
     pub metadata: serde_json::Value,
     pub created_at: Option<DateTime<Utc>>,
+    /// Per-wallet Telegram chat ID — populated from the wallets table by the alert engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_chat_id: Option<i64>,
 }

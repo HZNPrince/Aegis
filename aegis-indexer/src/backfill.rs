@@ -62,7 +62,7 @@ pub async fn backfill_wallet(
         KAMINO_PROGRAM_ID.to_string(),
         Box::new(KaminoParser { state: state.clone() }),
     );
-    parsers.insert(SAVE_PROGRAM_ID.to_string(), Box::new(SaveParser));
+    parsers.insert(SAVE_PROGRAM_ID.to_string(), Box::new(SaveParser { state: state.clone() }));
     parsers.insert(
         MARGINFI_V2_PROGRAM_ID.to_string(),
         Box::new(MarginfiParser { state: state.clone() }),

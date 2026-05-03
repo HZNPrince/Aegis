@@ -85,9 +85,7 @@ export function useIntents(wallet: string | null) {
   });
 }
 
-/// Full repay flow: ask API to build the unsigned tx + persist the intent,
-/// hand the serialized bytes to the wallet, submit the signed tx, then
-/// PATCH the intent status so the dashboard reflects progress.
+// Full repay flow: build unsigned tx, sign via wallet, submit, then PATCH intent status.
 export function useRepayIntent() {
   const qc = useQueryClient();
   const { connection } = useConnection();
@@ -149,5 +147,37 @@ export function useCancelIntent() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['intents'] });
     },
+  });
+}
+
+export function useWalletSettings(wallet: string | null) {
+  return useQuery({
+    queryKey: ['wallet-settings', wallet],
+    queryFn: () => api.getWalletSettings(wallet!),
+    enabled: !!wallet,
+  });
+}
+
+export function useLinkTelegram() {
+  return useMutation({
+    mutationFn: ({ wallet, chatId }: { wallet: string; chatId: number }) =>
+      api.linkTelegram(wallet, chatId),
+  });
+}
+
+export function useDeleteGuardRule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ruleId: string) => api.deleteGuardRule(ruleId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['guard-rules'] });
+    },
+  });
+}
+
+export function useLinkEmail() {
+  return useMutation({
+    mutationFn: ({ wallet, email }: { wallet: string; email: string }) =>
+      api.linkEmail(wallet, email),
   });
 }

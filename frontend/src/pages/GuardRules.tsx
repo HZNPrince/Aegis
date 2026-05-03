@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { DEMO_MODE } from '../api';
 import { Card, EmptyState, ProtocolBadge, Toggle } from '../components/ui';
-import { useGuardRules, useUpsertGuardRule } from '../hooks';
+import { useDeleteGuardRule, useGuardRules, useUpsertGuardRule } from '../hooks';
 import { MOCK_GUARD_RULES, MOCK_WALLET_FULL } from '../mockData';
 import type { ActionKind, GuardRule, GuardRuleWire, Protocol, TriggerKind } from '../types';
 import { fmtUsd, guardRuleWireToRule, timeAgo } from '../utils';
@@ -31,6 +31,7 @@ export function GuardRules() {
 
   const rulesQ = useGuardRules(useLive ? wallet : null);
   const upsert = useUpsertGuardRule();
+  const deleteRule = useDeleteGuardRule();
 
   const [localRules, setLocalRules] = useState<GuardRule[]>(MOCK_GUARD_RULES);
   const [showModal, setShowModal] = useState(false);
@@ -132,6 +133,10 @@ export function GuardRules() {
               rule={rule}
               isPremium={isPremium}
               onToggle={() => toggleRule(rule.id)}
+              onDelete={() => {
+                setLocalRules((r) => r.filter((x) => x.id !== rule.id));
+                if (useLive) deleteRule.mutate(rule.id);
+              }}
             />
           ))}
         </div>
@@ -228,10 +233,12 @@ function RuleCard({
   rule,
   isPremium,
   onToggle,
+  onDelete,
 }: {
   rule: GuardRule;
   isPremium: boolean;
   onToggle: () => void;
+  onDelete: () => void;
 }) {
   const isAutoAction = rule.action_kind !== 'NotifyOnly';
   const locked = isAutoAction && !isPremium;
@@ -255,8 +262,27 @@ function RuleCard({
   return (
     <Card style={{ padding: '20px 24px', opacity: rule.is_active ? 1 : 0.6 }}>
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-        <Toggle checked={rule.is_active && !locked} onChange={onToggle} />
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
+          <Toggle checked={rule.is_active && !locked} onChange={onToggle} />
+          <button
+            onClick={onDelete}
+            title="Delete rule"
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: 'rgba(245,244,239,0.25)',
+              fontSize: 14,
+              lineHeight: 1,
+              padding: 2,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#D9604E'; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'rgba(245,244,239,0.25)'; }}
+          >
+            ✕
+          </button>
+        </div>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <div
             style={{
               display: 'flex',

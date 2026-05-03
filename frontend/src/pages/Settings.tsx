@@ -1,11 +1,11 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { motion } from 'framer-motion';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { DEMO_MODE } from '../api';
 import { ShieldIcon } from '../components/ShieldIcon';
 import { Card, SectionLabel } from '../components/ui';
-import { useStatus } from '../hooks';
+import { useLinkEmail, useLinkTelegram, useStatus, useWalletSettings } from '../hooks';
 import { MOCK_STATUS, MOCK_WALLET_FULL } from '../mockData';
 import { truncAddr } from '../utils';
 
@@ -23,18 +23,54 @@ export function Settings({ onDisconnect }: Props) {
 
   const [telegramId, setTelegramId] = useState('');
   const [email, setEmail] = useState('');
-  const [savedTg, setSavedTg] = useState(false);
-  const [savedEmail, setSavedEmail] = useState(false);
+  const [tgError, setTgError] = useState('');
+  const [emailError, setEmailError] = useState('');
+
+  const linkTg = useLinkTelegram();
+  const linkEmail = useLinkEmail();
+  const settingsQ = useWalletSettings(connectedAddr);
+
+  // Pre-populate telegram field from saved DB value on mount / wallet change.
+  useEffect(() => {
+    if (settingsQ.data?.telegram_chat_id) {
+      setTelegramId(String(settingsQ.data.telegram_chat_id));
+    }
+  }, [settingsQ.data]);
 
   const saveTg = () => {
-    setSavedTg(true);
-    setTimeout(() => setSavedTg(false), 2000);
-  };
-  const saveEmail = () => {
-    setSavedEmail(true);
-    setTimeout(() => setSavedEmail(false), 2000);
+    const chatId = parseInt(telegramId.trim(), 10);
+    if (!connectedAddr || DEMO_MODE) return;
+    if (isNaN(chatId)) {
+      setTgError('Chat ID must be a number. Get it by messaging @userinfobot on Telegram.');
+      return;
+    }
+    setTgError('');
+    linkTg.mutate(
+      { wallet: connectedAddr, chatId },
+      {
+        onError: (e) => setTgError(e instanceof Error ? e.message : String(e)),
+      },
+    );
   };
 
+  const saveEmail = () => {
+    if (!connectedAddr || DEMO_MODE) return;
+    const trimmed = email.trim();
+    if (!trimmed || !trimmed.includes('@')) {
+      setEmailError('Please enter a valid email address.');
+      return;
+    }
+    setEmailError('');
+    linkEmail.mutate(
+      { wallet: connectedAddr, email: trimmed },
+      {
+        onError: (e) => setEmailError(e instanceof Error ? e.message : String(e)),
+      },
+    );
+  };
+
+  const savedTg = linkTg.isSuccess || !!settingsQ.data?.telegram_chat_id;
+  const savedEmail = linkEmail.isSuccess;
   return (
     <div style={{ padding: '88px 28px 60px', maxWidth: 640, margin: '0 auto' }}>
       <h2
@@ -211,16 +247,15 @@ export function Settings({ onDisconnect }: Props) {
               {savedTg ? 'Saved ✓' : 'Save'}
             </button>
           </div>
-          <div
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 11,
-              color: 'rgba(245,244,239,0.25)',
-              marginTop: 6,
-            }}
-          >
-            Start a chat with @AegisAlertBot and send /start to get your chat ID.
-          </div>
+          {tgError ? (
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: '#D9604E', marginTop: 6 }}>
+              {tgError}
+            </div>
+          ) : (
+            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: 'rgba(245,244,239,0.25)', marginTop: 6 }}>
+              Message @AegisAlertBot on Telegram with <code>/link {truncAddr(displayAddr)}</code> — or enter your chat ID here.
+            </div>
+          )}
         </div>
         <div>
           <div
