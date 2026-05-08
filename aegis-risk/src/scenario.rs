@@ -2,10 +2,10 @@
 //! Takes base WalletRisk and applies collateral/debt shocks, then recalculates health.
 //! Used by: API endpoint POST /api/scenario for "what-if" analysis.
 
-use serde::{Deserialize, Serialize};
-
 use crate::health::risk_from_positions;
 use aegis_core::types::{PositionUpdate, WalletRisk};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScenarioRequest {
@@ -37,10 +37,7 @@ pub fn simulate(base: WalletRisk, request: &ScenarioRequest) -> ScenarioResponse
     }
 }
 
-fn apply_shocks(
-    positions: &[PositionUpdate],
-    request: &ScenarioRequest,
-) -> Vec<PositionUpdate> {
+fn apply_shocks(positions: &[PositionUpdate], request: &ScenarioRequest) -> Vec<PositionUpdate> {
     positions
         .iter()
         .map(|position| {
@@ -51,7 +48,8 @@ fn apply_shocks(
                 .copied()
                 .unwrap_or(1.0);
 
-            let collateral_multiplier = (1.0 + request.collateral_shock_pct.unwrap_or(0.0)).max(0.0);
+            let collateral_multiplier =
+                (1.0 + request.collateral_shock_pct.unwrap_or(0.0)).max(0.0);
             let debt_multiplier = (1.0 + request.debt_shock_pct.unwrap_or(0.0)).max(0.0);
 
             next.collateral_usd *= protocol_multiplier * collateral_multiplier;

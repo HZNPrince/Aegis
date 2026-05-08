@@ -1,11 +1,13 @@
 //! Health score calculation — computes wallet risk metrics from current positions and live prices.
 //! Main entry point is wallet_risk(), which returns a WalletRisk with health_score (0–100), LTV, and buffer.
 //! Used by: alert engine to evaluate wallets, API to return health snapshots, scenario simulator for shocks.
-
 use aegis_core::{
     state::AppState,
-    types::{AlertSeverity, PositionUpdate, ProtocolHealth, WalletRisk, default_liquidation_threshold},
+    types::{
+        AlertSeverity, PositionUpdate, ProtocolHealth, WalletRisk, default_liquidation_threshold,
+    },
 };
+use std::collections::HashMap;
 
 pub fn wallet_risk(state: &AppState, wallet: &str) -> WalletRisk {
     let mut positions: Vec<PositionUpdate> = state
@@ -28,11 +30,15 @@ pub fn wallet_risk(state: &AppState, wallet: &str) -> WalletRisk {
         }
         // Legs are the source of truth: re-derive totals so a fully-repaid borrow shows 0 debt.
         if !pos.legs.is_empty() {
-            pos.collateral_usd = pos.legs.iter()
+            pos.collateral_usd = pos
+                .legs
+                .iter()
                 .filter(|l| matches!(l.side, aegis_core::types::PositionSide::Collateral))
                 .map(|l| l.value_usd)
                 .sum();
-            pos.debt_usd = pos.legs.iter()
+            pos.debt_usd = pos
+                .legs
+                .iter()
                 .filter(|l| matches!(l.side, aegis_core::types::PositionSide::Borrow))
                 .map(|l| l.value_usd)
                 .sum();
