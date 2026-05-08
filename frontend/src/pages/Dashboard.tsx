@@ -269,11 +269,11 @@ function PositionGroup({
         </div>
       ) : (
         <>
-          {/* Column headers — Protocol | Asset | Amount | USD Value | (action) */}
+          {/* Column headers — Protocol | Asset | Amount | USD Value | Updated | (action) */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '38px 1.4fr 1fr 1fr auto',
+              gridTemplateColumns: '38px 1.4fr 1fr 1fr 0.85fr auto',
               alignItems: 'center',
               gap: 12,
               padding: '0 12px 8px',
@@ -287,7 +287,8 @@ function PositionGroup({
             <span />
             <span>Asset</span>
             <span style={{ textAlign: 'right' }}>Amount</span>
-            <span style={{ textAlign: 'right' }}>Value</span>
+            <span style={{ textAlign: 'right' }}>USD Value</span>
+            <span style={{ textAlign: 'right' }}>Updated</span>
             <span />
           </div>
           <div style={{ display: 'grid', gap: 6 }}>
@@ -337,7 +338,7 @@ function PositionRow({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: '38px 1.4fr 1fr 1fr auto',
+        gridTemplateColumns: '38px 1.4fr 1fr 1fr 0.85fr auto',
         alignItems: 'center',
         gap: 12,
         padding: '10px 12px',
@@ -445,6 +446,20 @@ function PositionRow({
         }}
       >
         {fmtUsd(pos.value_usd)}
+      </div>
+
+      {/* Last updated — relative time, hover for absolute */}
+      <div
+        title={pos.updated_at ? new Date(pos.updated_at).toLocaleString() : ''}
+        style={{
+          fontFamily: tokens.mono,
+          fontSize: 11.5,
+          color: 'color-mix(in oklab, var(--ink) 55%, transparent)',
+          textAlign: 'right',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {pos.updated_at ? timeAgo(pos.updated_at) : '—'}
       </div>
 
       {/* Action — only for repayable borrows */}
