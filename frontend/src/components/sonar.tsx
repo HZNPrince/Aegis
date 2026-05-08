@@ -2,6 +2,7 @@
 import type { CSSProperties, MouseEventHandler, ReactNode } from 'react';
 import { motion, useInView } from 'framer-motion';
 import { useEffect, useRef, useState } from 'react';
+import { useTicker } from '../hooks';
 import { MOCK_PRICES } from '../mockData';
 
 export const tokens = {
@@ -575,9 +576,27 @@ export function LiveSonarBackground({
 
 /** ─── Price Ticker ───
  *  Infinite scrolling strip of token prices, right → left.
+ *  Pulls live prices from /api/ticker; falls back to MOCK_PRICES while loading
+ *  or if the indexer hasn't priced a particular asset yet.
  */
+const TICKER_SYMBOLS: { symbol: string; mint: string }[] = [
+  { symbol: 'SOL', mint: 'So11111111111111111111111111111111111111112' },
+  { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' },
+  { symbol: 'USDT', mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB' },
+  { symbol: 'mSOL', mint: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z1Zbk7Jo47ZvZEuQ' },
+  { symbol: 'JitoSOL', mint: 'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn' },
+  { symbol: 'BONK', mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' },
+  { symbol: 'WIF', mint: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm' },
+  { symbol: 'JUP', mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN' },
+  { symbol: 'RAY', mint: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R' },
+];
+
 export function PriceTicker({ style }: { style?: CSSProperties }) {
-  const prices = Object.entries(MOCK_PRICES);
+  const tickerQ = useTicker();
+  const prices: [string, number][] = TICKER_SYMBOLS.map(({ symbol, mint }) => {
+    const live = tickerQ.data?.[mint]?.price;
+    return [symbol, typeof live === 'number' && live > 0 ? live : (MOCK_PRICES[symbol] ?? 0)];
+  });
   // Double for seamless loop
   const items = [...prices, ...prices];
 

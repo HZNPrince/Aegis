@@ -82,13 +82,15 @@ export function Settings({ onDisconnect }: Props) {
         </div>
       </SettingsSection>
 
-      {/* ─── Connect Bot ─── */}
-      <SettingsSection title="Connect Telegram Bot">
-        <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 16, marginBottom: 20 }}>
+      {/* ─── Telegram Bot ─── */}
+      <SettingsSection title="Telegram Bot">
+        <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 16, marginBottom: isBotConnected ? 0 : 20 }}>
           <div>
             <div style={{ fontFamily: tokens.sans, fontSize: 15, fontWeight: 600 }}>@AegisBot</div>
             <p style={{ fontFamily: tokens.sans, fontSize: 13, color: tokens.ink2, marginTop: 4, lineHeight: 1.5 }}>
-              Open the bot and send the one-time code to link your wallet ({truncAddr(displayAddr)}).
+              {isBotConnected
+                ? `Linked — alerts for ${truncAddr(displayAddr)} are sent to your Telegram.`
+                : `Open the bot and send the one-time code to link your wallet (${truncAddr(displayAddr)}).`}
             </p>
           </div>
           <Chip tone={isBotConnected ? 'healthy' : 'neutral'}>
@@ -96,39 +98,46 @@ export function Settings({ onDisconnect }: Props) {
           </Chip>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10 }}>
-          <div style={{
-            minHeight: 44,
-            display: 'flex',
-            alignItems: 'center',
-            padding: '0 14px',
-            border: `1px solid ${tokens.lineSoft}`,
-            borderRadius: 8,
-            background: tokens.paper2,
-            fontFamily: tokens.mono,
-            fontSize: 16,
-            letterSpacing: '0.04em',
-          }}>
-            {createCode.isPending ? 'Generating…' : code}
+        {isBotConnected ? (
+          <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <a href={deepLink} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+              <Button size="sm">Open bot</Button>
+            </a>
+            {connectedAddr ? (
+              <Button variant="danger" size="sm" disabled={unlink.isPending} onClick={() => unlink.mutate(connectedAddr)}>
+                {unlink.isPending ? 'Unlinking…' : 'Unlink'}
+              </Button>
+            ) : null}
           </div>
-          <Button onClick={copyCode}>{copied ? 'Copied' : 'Copy'}</Button>
-          <a href={deepLink} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-            <Button variant="accent">Open bot</Button>
-          </a>
-        </div>
-
-        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          <p style={{ fontFamily: tokens.sans, color: tokens.ink2, fontSize: 12 }}>
-            {createCode.error
-              ? 'Preview code shown because the API did not return a live code.'
-              : 'Codes expire automatically. This page polls until Telegram confirms the link.'}
-          </p>
-          {isBotConnected && connectedAddr ? (
-            <Button variant="danger" size="sm" disabled={unlink.isPending} onClick={() => unlink.mutate(connectedAddr)}>
-              Unlink
-            </Button>
-          ) : null}
-        </div>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10 }}>
+              <div style={{
+                minHeight: 44,
+                display: 'flex',
+                alignItems: 'center',
+                padding: '0 14px',
+                border: `1px solid ${tokens.lineSoft}`,
+                borderRadius: 8,
+                background: tokens.paper2,
+                fontFamily: tokens.mono,
+                fontSize: 16,
+                letterSpacing: '0.04em',
+              }}>
+                {createCode.isPending ? 'Generating…' : code}
+              </div>
+              <Button onClick={copyCode}>{copied ? 'Copied' : 'Copy'}</Button>
+              <a href={deepLink} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+                <Button variant="accent">Open bot</Button>
+              </a>
+            </div>
+            <p style={{ fontFamily: tokens.sans, color: tokens.ink2, fontSize: 12, marginTop: 14 }}>
+              {createCode.error
+                ? 'Preview code shown because the API did not return a live code.'
+                : 'Codes expire automatically. This page polls until Telegram confirms the link.'}
+            </p>
+          </>
+        )}
       </SettingsSection>
 
       {/* ─── System Status ─── */}

@@ -17,7 +17,6 @@ import { ProtocolDetail } from './pages/PositionDetail';
 import { Positions } from './pages/Positions';
 import { Settings } from './pages/Settings';
 import { Simulator } from './pages/Simulator';
-import { Telegram } from './pages/Telegram';
 
 function App() {
   const { connected, publicKey, disconnect } = useWallet();
@@ -66,7 +65,7 @@ function App() {
               <Route path="/protocol/:protocolName" element={<Protected connected={connected}><ProtocolDetail /></Protected>} />
               <Route path="/alerts" element={<Protected connected={connected}><Alerts /></Protected>} />
               <Route path="/rules" element={<Protected connected={connected}><GuardRules /></Protected>} />
-              <Route path="/telegram" element={<Protected connected={connected}><Telegram /></Protected>} />
+              <Route path="/telegram" element={<Navigate to="/settings" replace />} />
               <Route path="/simulator" element={<Protected connected={connected}><Simulator /></Protected>} />
               <Route path="/settings" element={<Protected connected={connected}><Settings onDisconnect={handleDisconnect} /></Protected>} />
               <Route path="*" element={<Navigate to="/" replace />} />

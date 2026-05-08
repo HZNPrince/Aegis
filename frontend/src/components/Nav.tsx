@@ -108,7 +108,6 @@ const LINKS: { to: string; label: string }[] = [
   { to: '/positions', label: 'Positions' },
   { to: '/alerts', label: 'Alerts' },
   { to: '/rules', label: 'Guardrails' },
-  { to: '/telegram', label: 'Telegram' },
 ];
 
 function shortAddr(w: string) {

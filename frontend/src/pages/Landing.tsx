@@ -11,6 +11,7 @@ import {
   tokens,
 } from '../components/sonar';
 import { SonarLogo } from '../components/SonarLogo';
+import { useStatus } from '../hooks';
 
 interface Props {
   onConnect: () => void;
@@ -18,11 +19,6 @@ interface Props {
 
 const PROTOCOLS = ['Kamino', 'Save', 'MarginFi'];
 
-const STATS: { k: string; v: number; suf?: string; pre?: string }[] = [
-  { k: 'Protocols watched', v: 3 },
-  { k: 'Wallets monitored', v: 1240 },
-  { k: 'Alerts in last 24h', v: 318 },
-];
 
 const STEPS = [
   {
@@ -75,6 +71,14 @@ const PULSE_MESSAGES = [
 
 export function Landing({ onConnect }: Props) {
   const { connecting } = useWallet();
+  const statusQ = useStatus();
+  // Show live indexer-backed numbers; fall back to 0 while the request is in
+  // flight (CountUp animates up from 0 anyway, so no flicker).
+  const stats: { k: string; v: number; suf?: string; pre?: string }[] = [
+    { k: 'Protocols watched', v: 3 },
+    { k: 'Wallets monitored', v: statusQ.data?.wallets_monitored ?? 0 },
+    { k: 'Positions tracked', v: statusQ.data?.positions_cached ?? 0 },
+  ];
 
   return (
     <div style={{ background: tokens.paper, color: tokens.ink, overflow: 'hidden' }}>
@@ -197,7 +201,7 @@ export function Landing({ onConnect }: Props) {
       {/* ─── Stats strip ─── */}
       <section style={{ borderTop: `1px solid ${tokens.line}`, borderBottom: `1px solid ${tokens.line}`, background: tokens.paper2 }}>
         <div style={{ maxWidth: 1180, margin: '0 auto', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)' }}>
-          {STATS.map((s, i) => (
+          {stats.map((s, i) => (
             <Reveal key={s.k} delay={i * 0.08}>
               <div style={{ padding: '32px 36px', borderLeft: i > 0 ? `1px solid ${tokens.line}` : 'none' }}>
                 <Eyebrow>{s.k}</Eyebrow>
