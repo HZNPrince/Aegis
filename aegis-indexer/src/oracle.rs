@@ -1,8 +1,6 @@
-//! Oracle Engine — discovers token mints from lending pools and polls Jupiter for USD prices.
-//!
-//! At startup, fetches all Marginfi Banks and Kamino Reserves via RPC to build
-//! a map of (bank/reserve pubkey → token mint). Then spawns a background task
-//! that polls Jupiter Price API every 10 seconds to keep USD prices fresh.
+//! Oracle engine — discovers token mints from lending pools, polls Jupiter for USD prices.
+//! Maintains cached bank/reserve data for all three protocols, refreshed periodically from RPC.
+//! Used by: aegis-server at startup to discover mints, then runs background price/bank refresh loops.
 
 use klend_sdk::accounts::Reserve;
 use solana_client::{
@@ -34,8 +32,19 @@ const SEED_MINTS: &[&str] = &[
     "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", // JUP
     "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3", // PYTH
     "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", // JitoSOL
+    "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v", // jupSOL (Sanctum)
     "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So", // mSOL
     "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1", // bSOL
+    "LSoLi2stepNoznKTYxiHD9L91FQhYQdkPiQGFRfaYh8", // lSOL (Sanctum)
+    "edge86g9cVz87xcpKpy3J77vbp4wYd9idEV562CCntt",  // edgeSOL (Sanctum)
+];
+
+/// Sanctum LST mints that are not reliably priced by Jupiter's price API.
+/// These are fetched via Sanctum's sol-value API and multiplied by SOL price.
+const SANCTUM_LST_MINTS: &[&str] = &[
+    "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v", // jupSOL
+    "LSoLi2stepNoznKTYxiHD9L91FQhYQdkPiQGFRfaYh8", // lSOL
+    "edge86g9cVz87xcpKpy3J77vbp4wYd9idEV562CCntt",  // edgeSOL
 ];
 
 /// Fetches all Marginfi Banks and Kamino Reserves, extracts their token mints,
@@ -440,76 +449,191 @@ pub async fn start_save_reserve_refresh_loop(rpc_url: String, state: Arc<crate::
 
 /// Background task: polls Jupiter Price API v3 every 10 seconds for all known token mints.
 /// Writes prices into `state.token_prices` (DashMap<mint, f64>).
-pub async fn start_jupiter_poller(state: Arc<crate::state::AppState>, mints: Vec<String>) {
+///
+/// **Critical fix:** SEED_MINTS (SOL, USDC, USDT, etc.) are polled in a
+/// dedicated priority chunk before all other mints. This ensures the core
+/// prices used for position repricing are never dropped due to rate-limiting
+/// on larger discovery chunks.
+pub async fn start_jupiter_poller(state: Arc<crate::state::AppState>, _initial_mints: Vec<String>) {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .expect("reqwest client");
 
-    // Jupiter /price/v3 nominally allows 100 mints per GET, but at that
-    // size the URL crosses 4KB and some chunks return partial responses
-    // (observed USDC + SOL dropping out repeatedly).
-    const CHUNK_SIZE: usize = 100;
-    let chunks: Vec<Vec<String>> = mints.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
+    let seed_set: std::collections::HashSet<&str> = SEED_MINTS.iter().copied().collect();
+    let seed_chunk: Vec<String> = SEED_MINTS.iter().map(|s| s.to_string()).collect();
 
-    info!(
-        "Jupiter poller started for {} tokens across {} chunks of {}",
-        mints.len(),
-        chunks.len(),
-        CHUNK_SIZE
-    );
+    // Smaller chunks (50) avoid URL length issues and reduce the blast radius
+    // of a single 429 — losing 50 obscure mints is better than losing SOL+USDC.
+    const CHUNK_SIZE: usize = 50;
+
+    info!("Jupiter poller started: dynamic mint list driven by state.token_mints");
 
     loop {
+        // Pull the live mint set from state each cycle. Newly-discovered
+        // banks/reserves (added by the refresh loops) automatically join the
+        // poll list — without this, the initial boot snapshot would be frozen
+        // forever and tokens like USDG (added post-boot) never get priced.
+        let mut live_mints: std::collections::HashSet<String> = state
+            .token_mints
+            .iter()
+            .map(|kv| kv.value().clone())
+            .collect();
+        for m in SEED_MINTS {
+            live_mints.insert((*m).to_string());
+        }
+        let remaining: Vec<String> = live_mints
+            .into_iter()
+            .filter(|m| !seed_set.contains(m.as_str()))
+            .collect();
+        let other_chunks: Vec<Vec<String>> =
+            remaining.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
+
         let mut prices_updated = 0;
         let mut chunks_failed = 0;
 
-        for (chunk_idx, chunk) in chunks.iter().enumerate() {
-            let ids = chunk.join(",");
-            let url = format!("https://api.jup.ag/price/v3?ids={}", ids);
-
-            let result = async {
-                let resp = client.get(&url).send().await?;
-                let status = resp.status();
-                if !status.is_success() {
-                    return Err(anyhow::anyhow!("HTTP {} on chunk {}", status, chunk_idx));
-                }
-                let json: serde_json::Value = resp.json().await?;
-                let map = json
-                    .as_object()
-                    .ok_or_else(|| anyhow::anyhow!("non-object response on chunk {}", chunk_idx))?;
-                let mut updated = 0;
-                for (mint, token_data) in map {
-                    if let Some(price) = token_data.get("usdPrice").and_then(|v| v.as_f64()) {
-                        state.token_prices.insert(mint.clone(), price);
-                        updated += 1;
-                    }
-                    if let Some(ch) = token_data.get("priceChange24h").and_then(|v| v.as_f64()) {
-                        state.token_price_changes.insert(mint.clone(), ch);
+        // --- Priority: poll seed mints first with retry ---
+        let seed_result = poll_jupiter_chunk(&client, &state, &seed_chunk, "seed").await;
+        match seed_result {
+            Ok(n) => prices_updated += n,
+            Err(_) => {
+                // Retry once after a 3s backoff — seed prices are critical.
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                match poll_jupiter_chunk(&client, &state, &seed_chunk, "seed-retry").await {
+                    Ok(n) => prices_updated += n,
+                    Err(e) => {
+                        chunks_failed += 1;
+                        tracing::warn!("jupiter seed chunk failed even after retry: {}", e);
                     }
                 }
-                Ok::<_, anyhow::Error>(updated)
             }
-            .await;
+        }
 
-            match result {
+        // Pace before starting the remaining chunks.
+        tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+
+        // --- Remaining protocol mints ---
+        for (chunk_idx, chunk) in other_chunks.iter().enumerate() {
+            let label = format!("chunk-{}", chunk_idx);
+            match poll_jupiter_chunk(&client, &state, chunk, &label).await {
                 Ok(n) => prices_updated += n,
                 Err(e) => {
                     chunks_failed += 1;
-                    tracing::warn!("jupiter chunk {} failed: {}", chunk_idx, e);
+                    tracing::warn!("jupiter {} failed: {}", label, e);
                 }
             }
 
-            // Polite pacing between chunks to avoid 429 Too Many Requests
-            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            // 2s pacing between chunks to stay well under rate limits.
+            tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
         }
 
         tracing::info!(
-            "jupiter cycle: {} prices, {} chunks failed, cache={}",
+            "jupiter cycle: {} updated, {} chunks failed, polled={} mints, cache={}",
             prices_updated,
             chunks_failed,
+            seed_chunk.len() + remaining.len(),
             state.token_prices.len()
         );
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+    }
+}
+
+/// Poll a single chunk of mints from Jupiter and insert prices into state.
+async fn poll_jupiter_chunk(
+    client: &reqwest::Client,
+    state: &Arc<crate::state::AppState>,
+    mints: &[String],
+    label: &str,
+) -> anyhow::Result<usize> {
+    if mints.is_empty() {
+        return Ok(0);
+    }
+    let ids = mints.join(",");
+    let url = format!("https://api.jup.ag/price/v3?ids={}", ids);
+
+    let resp = client.get(&url).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("HTTP {} on {}", status, label));
+    }
+    let json: serde_json::Value = resp.json().await?;
+    let map = json
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("non-object response on {}", label))?;
+    let mut updated = 0;
+    for (mint, token_data) in map {
+        if let Some(price) = token_data.get("usdPrice").and_then(|v| v.as_f64()) {
+            state.token_prices.insert(mint.clone(), price);
+            updated += 1;
+        }
+        if let Some(ch) = token_data.get("priceChange24h").and_then(|v| v.as_f64()) {
+            state.token_price_changes.insert(mint.clone(), ch);
+        }
+    }
+    Ok(updated)
+}
+/// Background task: prices Sanctum LSTs not covered by Jupiter's price API.
+///
+/// Sanctum's sol-value API returns the SOL NAV (net asset value) for each LST.
+/// We multiply by the current SOL USD price to get USD price.
+/// Runs every 60 s; silently skips the cycle if SOL price is not yet loaded.
+pub async fn start_sanctum_lst_poller(state: Arc<crate::state::AppState>) {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .expect("reqwest client");
+
+    let sol_mint = "So11111111111111111111111111111111111111112";
+    let lst_param = SANCTUM_LST_MINTS.join(",");
+
+    info!(
+        "Sanctum LST poller started for {} mints",
+        SANCTUM_LST_MINTS.len()
+    );
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+
+        let Some(sol_price) = state.token_prices.get(sol_mint).map(|p| *p) else {
+            continue;
+        };
+        if sol_price <= 0.0 {
+            continue;
+        }
+
+        let url = format!(
+            "https://extra.jup.ag/v1/sol-value/current?lst={}",
+            lst_param
+        );
+
+        let result: anyhow::Result<()> = async {
+            let resp = client.get(&url).send().await?;
+            if !resp.status().is_success() {
+                return Err(anyhow::anyhow!("HTTP {}", resp.status()));
+            }
+            let json: serde_json::Value = resp.json().await?;
+            let map = json.as_object().ok_or_else(|| anyhow::anyhow!("non-object"))?;
+            let mut updated = 0;
+            for (mint, sol_val) in map {
+                // sol_val is a string decimal (e.g. "1.0432")
+                let nav: f64 = sol_val
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| sol_val.as_f64())
+                    .unwrap_or(0.0);
+                if nav > 0.0 {
+                    state.token_prices.insert(mint.clone(), nav * sol_price);
+                    updated += 1;
+                }
+            }
+            info!("[oracle] sanctum LST cycle: {} prices updated", updated);
+            Ok(())
+        }
+        .await;
+
+        if let Err(e) = result {
+            warn!("[oracle] sanctum LST fetch failed: {}", e);
+        }
     }
 }

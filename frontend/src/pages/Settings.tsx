@@ -1,11 +1,15 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { DEMO_MODE } from '../api';
-import { ShieldIcon } from '../components/ShieldIcon';
-import { Card, SectionLabel } from '../components/ui';
-import { useLinkEmail, useLinkTelegram, useStatus, useWalletSettings } from '../hooks';
+import { Button, Card, Chip, Eyebrow, Reveal, tokens } from '../components/sonar';
+import {
+  useCreateTelegramLinkCode,
+  useStatus,
+  useUnlinkTelegram,
+  useWalletSettings,
+} from '../hooks';
 import { MOCK_STATUS, MOCK_WALLET_FULL } from '../mockData';
 import { truncAddr } from '../utils';
 
@@ -21,481 +25,139 @@ export function Settings({ onDisconnect }: Props) {
   const statusQ = useStatus();
   const status = !DEMO_MODE && statusQ.data ? statusQ.data : MOCK_STATUS;
 
-  const [telegramId, setTelegramId] = useState('');
-  const [email, setEmail] = useState('');
-  const [tgError, setTgError] = useState('');
-  const [emailError, setEmailError] = useState('');
-
-  const linkTg = useLinkTelegram();
-  const linkEmail = useLinkEmail();
   const settingsQ = useWalletSettings(connectedAddr);
 
-  // Pre-populate telegram field from saved DB value on mount / wallet change.
+  // Telegram bot connect
+  const createCode = useCreateTelegramLinkCode();
+  const unlink = useUnlinkTelegram();
+  const [copied, setCopied] = useState(false);
+
   useEffect(() => {
-    if (settingsQ.data?.telegram_chat_id) {
-      setTelegramId(String(settingsQ.data.telegram_chat_id));
+    if (connectedAddr && !DEMO_MODE && !settingsQ.data?.telegram_chat_id && !createCode.data && !createCode.isPending) {
+      createCode.mutate(connectedAddr);
     }
-  }, [settingsQ.data]);
+  }, [createCode, settingsQ.data?.telegram_chat_id, connectedAddr]);
 
-  const saveTg = () => {
-    const chatId = parseInt(telegramId.trim(), 10);
-    if (!connectedAddr || DEMO_MODE) return;
-    if (isNaN(chatId)) {
-      setTgError('Chat ID must be a number. Get it by messaging @userinfobot on Telegram.');
-      return;
-    }
-    setTgError('');
-    linkTg.mutate(
-      { wallet: connectedAddr, chatId },
-      {
-        onError: (e) => setTgError(e instanceof Error ? e.message : String(e)),
-      },
-    );
+  const isBotConnected = !!settingsQ.data?.telegram_chat_id;
+  const code = useMemo(() => createCode.data?.code ?? 'AEG-7K3M-9Q2X', [createCode.data]);
+  const deepLink = createCode.data?.deep_link ?? 'https://t.me/AegisBot';
+
+  const copyCode = () => {
+    void navigator.clipboard?.writeText(code);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
   };
 
-  const saveEmail = () => {
-    if (!connectedAddr || DEMO_MODE) return;
-    const trimmed = email.trim();
-    if (!trimmed || !trimmed.includes('@')) {
-      setEmailError('Please enter a valid email address.');
-      return;
-    }
-    setEmailError('');
-    linkEmail.mutate(
-      { wallet: connectedAddr, email: trimmed },
-      {
-        onError: (e) => setEmailError(e instanceof Error ? e.message : String(e)),
-      },
-    );
-  };
 
-  const savedTg = linkTg.isSuccess || !!settingsQ.data?.telegram_chat_id;
-  const savedEmail = linkEmail.isSuccess;
   return (
-    <div style={{ padding: '88px 28px 60px', maxWidth: 640, margin: '0 auto' }}>
-      <h2
-        style={{
-          fontFamily: "'Fraunces', serif",
-          fontSize: 32,
-          fontWeight: 600,
-          color: '#F5F4EF',
-          letterSpacing: '-0.02em',
-          marginBottom: 6,
-        }}
-      >
-        Settings
-      </h2>
-      <p
-        style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 14,
-          color: 'rgba(245,244,239,0.4)',
-          marginBottom: 32,
-        }}
-      >
-        Manage your wallet, notifications, and subscription.
-      </p>
+    <main style={{ padding: '64px 28px 72px', maxWidth: 720, margin: '0 auto' }}>
+      <Reveal>
+        <h1 style={{ fontFamily: tokens.sans, fontSize: 32, fontWeight: 700, letterSpacing: '-0.025em', margin: 0 }}>
+          Settings
+        </h1>
+        <p style={{ fontFamily: tokens.sans, fontSize: 15, color: tokens.ink2, marginTop: 6, marginBottom: 32 }}>
+          Manage your wallet, notifications, and integrations.
+        </p>
+      </Reveal>
 
+      {/* ─── Wallet ─── */}
       <SettingsSection title="Wallet">
-        <div
-          style={{
-            display: 'flex',
-            gap: 14,
-            alignItems: 'center',
-            padding: '14px 0',
-            borderBottom: '1px solid rgba(255,255,255,0.06)',
-          }}
-        >
-          <div
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: '50%',
-              background: 'rgba(217,119,87,0.15)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <ShieldIcon size={18} />
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center', paddingBottom: 16, borderBottom: `1px solid ${tokens.lineSoft}` }}>
+          <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(90,107,71,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1L14 4V12L8 15L2 12V4L8 1Z" stroke="var(--moss)" strokeWidth="1.5" fill="none"/></svg>
           </div>
           <div style={{ flex: 1 }}>
-            <div
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 13,
-                color: '#F5F4EF',
-                marginBottom: 2,
-              }}
-            >
-              {truncAddr(displayAddr)}
-            </div>
-            <div
-              style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 11,
-                color: 'rgba(245,244,239,0.35)',
-              }}
-            >
+            <div style={{ fontFamily: tokens.mono, fontSize: 13, fontWeight: 500 }}>{truncAddr(displayAddr)}</div>
+            <div style={{ fontFamily: tokens.sans, fontSize: 11, color: tokens.ink2, marginTop: 2 }}>
               {walletName} · {connectedAddr ? 'Connected' : 'Demo'}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={() => void navigator.clipboard?.writeText(displayAddr)}
-              style={{
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 100,
-                padding: '6px 14px',
-                cursor: 'pointer',
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 12,
-                color: 'rgba(245,244,239,0.5)',
-              }}
-            >
-              Copy
-            </button>
-            <button
-              onClick={onDisconnect}
-              style={{
-                background: 'rgba(217,96,78,0.1)',
-                border: '1px solid rgba(217,96,78,0.25)',
-                borderRadius: 100,
-                padding: '6px 14px',
-                cursor: 'pointer',
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 12,
-                color: '#D9604E',
-              }}
-            >
-              Disconnect
-            </button>
+            <Button size="sm" onClick={() => void navigator.clipboard?.writeText(displayAddr)}>Copy</Button>
+            <Button size="sm" variant="danger" onClick={onDisconnect}>Disconnect</Button>
           </div>
         </div>
-        <div style={{ paddingTop: 14 }}>
-          <div
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 12,
-              color: 'rgba(245,244,239,0.35)',
-              marginBottom: 10,
-            }}
-          >
-            Monitored wallets
-          </div>
-          <div
-            style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 12,
-              color: 'rgba(245,244,239,0.5)',
-              background: 'rgba(0,0,0,0.2)',
-              padding: '10px 14px',
-              borderRadius: 10,
-            }}
-          >
-            {truncAddr(displayAddr)} · {status.positions_cached} positions · monitoring {status.wallets_monitored > 0 ? 'active' : 'idle'}
-          </div>
+        <div style={{ paddingTop: 14, fontFamily: tokens.mono, fontSize: 12, color: tokens.ink2 }}>
+          {truncAddr(displayAddr)} · {status.positions_cached} positions · monitoring {status.wallets_monitored > 0 ? 'active' : 'idle'}
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Notifications">
-        <div style={{ marginBottom: 20 }}>
-          <div
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 13,
-              color: 'rgba(245,244,239,0.6)',
-              marginBottom: 8,
-            }}
-          >
-            Telegram
+      {/* ─── Connect Bot ─── */}
+      <SettingsSection title="Connect Telegram Bot">
+        <div style={{ display: 'flex', alignItems: 'start', justifyContent: 'space-between', gap: 16, marginBottom: 20 }}>
+          <div>
+            <div style={{ fontFamily: tokens.sans, fontSize: 15, fontWeight: 600 }}>@AegisBot</div>
+            <p style={{ fontFamily: tokens.sans, fontSize: 13, color: tokens.ink2, marginTop: 4, lineHeight: 1.5 }}>
+              Open the bot and send the one-time code to link your wallet ({truncAddr(displayAddr)}).
+            </p>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              value={telegramId}
-              onChange={(e) => setTelegramId(e.target.value)}
-              placeholder="Chat ID (e.g. 123456789)"
-              style={{
-                flex: 1,
-                background: 'rgba(0,0,0,0.3)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                padding: '10px 14px',
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 13,
-                color: '#F5F4EF',
-                outline: 'none',
-              }}
-            />
-            <button
-              onClick={saveTg}
-              style={{
-                background: savedTg ? '#7DA87B' : '#D97757',
-                border: 'none',
-                borderRadius: 12,
-                padding: '10px 18px',
-                cursor: 'pointer',
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 13,
-                fontWeight: 600,
-                color: '#1F1E1D',
-                transition: 'background 0.3s',
-                flexShrink: 0,
-              }}
-            >
-              {savedTg ? 'Saved ✓' : 'Save'}
-            </button>
-          </div>
-          {tgError ? (
-            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: '#D9604E', marginTop: 6 }}>
-              {tgError}
-            </div>
-          ) : (
-            <div style={{ fontFamily: "'Inter', sans-serif", fontSize: 11, color: 'rgba(245,244,239,0.25)', marginTop: 6 }}>
-              Message @AegisAlertBot on Telegram with <code>/link {truncAddr(displayAddr)}</code> — or enter your chat ID here.
-            </div>
-          )}
+          <Chip tone={isBotConnected ? 'healthy' : 'neutral'}>
+            {isBotConnected ? 'Connected' : 'Not connected'}
+          </Chip>
         </div>
-        <div>
-          <div
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 13,
-              color: 'rgba(245,244,239,0.6)',
-              marginBottom: 8,
-            }}
-          >
-            Email
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="your@email.com"
-              type="email"
-              style={{
-                flex: 1,
-                background: 'rgba(0,0,0,0.3)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 12,
-                padding: '10px 14px',
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 13,
-                color: '#F5F4EF',
-                outline: 'none',
-              }}
-            />
-            <button
-              onClick={saveEmail}
-              style={{
-                background: savedEmail ? '#7DA87B' : '#D97757',
-                border: 'none',
-                borderRadius: 12,
-                padding: '10px 18px',
-                cursor: 'pointer',
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 13,
-                fontWeight: 600,
-                color: '#1F1E1D',
-                transition: 'background 0.3s',
-                flexShrink: 0,
-              }}
-            >
-              {savedEmail ? 'Saved ✓' : 'Save'}
-            </button>
-          </div>
-        </div>
-      </SettingsSection>
 
-      <SettingsSection title="Subscription">
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 20 }}>
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
-              <span
-                style={{
-                  fontFamily: "'Fraunces', serif",
-                  fontSize: 18,
-                  fontWeight: 600,
-                  color: '#F5F4EF',
-                }}
-              >
-                Free tier
-              </span>
-              <span
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 11,
-                  color: 'rgba(245,244,239,0.4)',
-                  background: 'rgba(255,255,255,0.07)',
-                  padding: '2px 8px',
-                  borderRadius: 100,
-                }}
-              >
-                Active
-              </span>
-            </div>
-            <div
-              style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 13,
-                color: 'rgba(245,244,239,0.4)',
-              }}
-            >
-              Unified view, AI alerts, notify-only rules.
-            </div>
-          </div>
-        </div>
-        <div
-          style={{
-            background: 'rgba(217,119,87,0.06)',
-            border: '1px solid rgba(217,119,87,0.18)',
-            borderRadius: 16,
-            padding: '18px 20px',
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 10 }}>
+          <div style={{
+            minHeight: 44,
             display: 'flex',
-            gap: 14,
             alignItems: 'center',
-            boxShadow: '0 0 24px rgba(217,119,87,0.06)',
-          }}
-        >
-          <div style={{ flex: 1 }}>
-            <div
-              style={{
-                fontFamily: "'Fraunces', serif",
-                fontSize: 16,
-                fontWeight: 500,
-                color: '#F5F4EF',
-                marginBottom: 4,
-              }}
-            >
-              Aegis Pro
-            </div>
-            <div
-              style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 13,
-                color: 'rgba(245,244,239,0.45)',
-              }}
-            >
-              Autonomous execution · Unlimited rules · Priority alerts
-            </div>
-            <div
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 14,
-                color: '#D97757',
-                marginTop: 6,
-                fontWeight: 600,
-              }}
-            >
-              $19 / month
-            </div>
+            padding: '0 14px',
+            border: `1px solid ${tokens.lineSoft}`,
+            borderRadius: 8,
+            background: tokens.paper2,
+            fontFamily: tokens.mono,
+            fontSize: 16,
+            letterSpacing: '0.04em',
+          }}>
+            {createCode.isPending ? 'Generating…' : code}
           </div>
-          <button
-            style={{
-              background: '#D97757',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '11px 22px',
-              borderRadius: 100,
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#1F1E1D',
-              flexShrink: 0,
-            }}
-          >
-            Upgrade
-          </button>
+          <Button onClick={copyCode}>{copied ? 'Copied' : 'Copy'}</Button>
+          <a href={deepLink} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+            <Button variant="accent">Open bot</Button>
+          </a>
+        </div>
+
+        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <p style={{ fontFamily: tokens.sans, color: tokens.ink2, fontSize: 12 }}>
+            {createCode.error
+              ? 'Preview code shown because the API did not return a live code.'
+              : 'Codes expire automatically. This page polls until Telegram confirms the link.'}
+          </p>
+          {isBotConnected && connectedAddr ? (
+            <Button variant="danger" size="sm" disabled={unlink.isPending} onClick={() => unlink.mutate(connectedAddr)}>
+              Unlink
+            </Button>
+          ) : null}
         </div>
       </SettingsSection>
 
-      <SettingsSection title="API Key">
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <div
-            style={{
-              flex: 1,
-              background: 'rgba(0,0,0,0.2)',
-              border: '1px solid rgba(255,255,255,0.06)',
-              borderRadius: 10,
-              padding: '10px 14px',
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 12,
-              color: 'rgba(245,244,239,0.25)',
-              letterSpacing: '0.05em',
-            }}
-          >
-            ••••••••••••••••••••••••  (coming soon)
-          </div>
-          <button
-            disabled
-            style={{
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: 10,
-              padding: '10px 16px',
-              cursor: 'not-allowed',
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 12,
-              color: 'rgba(245,244,239,0.25)',
-            }}
-          >
-            Generate
-          </button>
-        </div>
-      </SettingsSection>
-
+      {/* ─── System Status ─── */}
       <SettingsSection title="System Status">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           {Object.entries(status).map(([k, v]) => (
-            <div
-              key={k}
-              style={{
-                background: 'rgba(0,0,0,0.2)',
-                borderRadius: 10,
-                padding: '10px 14px',
-              }}
-            >
-              <div
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 10,
-                  color: 'rgba(245,244,239,0.3)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.07em',
-                  marginBottom: 4,
-                }}
-              >
-                {k.replace(/_/g, ' ')}
-              </div>
-              <div
-                style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: 14,
-                  color: '#7DA87B',
-                  fontWeight: 600,
-                }}
-              >
+            <div key={k} style={{ background: tokens.paper2, borderRadius: 8, padding: '12px 14px' }}>
+              <Eyebrow>{k.replace(/_/g, ' ')}</Eyebrow>
+              <div style={{ fontFamily: tokens.mono, fontSize: 16, fontWeight: 600, marginTop: 6, color: tokens.moss }}>
                 {v}
               </div>
             </div>
           ))}
         </div>
       </SettingsSection>
-    </div>
+    </main>
   );
 }
 
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <motion.div
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      style={{ marginBottom: 28 }}
+      style={{ marginBottom: 24 }}
     >
-      <SectionLabel>{title}</SectionLabel>
-      <Card style={{ padding: '20px 22px' }}>{children}</Card>
+      <Eyebrow style={{ marginBottom: 12 }}>{title}</Eyebrow>
+      <Card pad={22}>{children}</Card>
     </motion.div>
   );
 }

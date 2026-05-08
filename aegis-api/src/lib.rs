@@ -1,6 +1,6 @@
-//! Aegis API — Axum HTTP server exposing cached DeFi position data.
-//!
-//! Endpoints:
+//! aegis-api — REST API server exposing wallet health, guard rules, alert history, and transaction intents.
+//! All endpoints are read-only except POST/PATCH/DELETE for wallet settings, guard rules, and intents.
+//! Used by: frontend, executor, and management tools; runs on port 7878 by default.
 //!   GET  /api/status                       — system health (positions cached, prices loaded)
 //!   GET  /api/prices                       — all cached token prices
 //!   GET  /api/ticker                       — prices + 24h change for the ticker rail
@@ -14,7 +14,12 @@
 //!   DELETE /api/guard-rules/:id            — delete a guard rule
 //!   GET  /api/wallets/by-chat/:chat_id     — reverse-lookup wallet by Telegram chat ID
 //!   PATCH /api/wallets/:wallet/telegram    — link Telegram chat ID
+//!   POST /api/wallets/:wallet/telegram/code — issue one-time Telegram link code
+//!   POST /api/telegram/redeem              — bot redeems code → links chat_id
 //!   PATCH /api/wallets/:wallet/email       — link email address
+//!   POST /api/intents/repay                — build an unsigned repay tx + persist intent
+//!   POST /api/intents/:id/submit           — submit a signed tx for an intent
+//!   GET  /api/intents/:id                  — read intent status
 
 mod handlers;
 
@@ -47,8 +52,19 @@ pub async fn start_server(state: Arc<AppState>) {
         .route("/api/guard-rules", post(handlers::upsert_guard_rule))
         .route("/api/guard-rules/{rule_id}", delete(handlers::delete_guard_rule))
         .route("/api/wallets/by-chat/{chat_id}", get(handlers::wallet_by_chat))
-        .route("/api/wallets/{wallet}/telegram", patch(handlers::link_telegram))
+        .route(
+            "/api/wallets/{wallet}/telegram",
+            patch(handlers::link_telegram).delete(handlers::unlink_telegram),
+        )
+        .route(
+            "/api/wallets/{wallet}/telegram/code",
+            post(handlers::create_telegram_link_code),
+        )
+        .route("/api/telegram/redeem", post(handlers::redeem_telegram_link_code))
         .route("/api/wallets/{wallet}/email", patch(handlers::link_email))
+        .route("/api/intents/repay", post(handlers::create_repay_intent))
+        .route("/api/intents/{intent_id}/submit", post(handlers::submit_intent))
+        .route("/api/intents/{intent_id}", get(handlers::get_intent))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state);

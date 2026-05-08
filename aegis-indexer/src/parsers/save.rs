@@ -307,11 +307,10 @@ fn parse_obligation(
         default_liquidation_threshold()
     };
 
-    // Leg sums are authoritative over the stale obligation header.
-    // The header fields (deposited_sf / borrowed_sf) are only updated lazily by
-    // Save's oracle — after a full repay the header can still show non-zero debt
-    // while every borrow entry has amount_native=0 (dust). Use leg sums when we
-    // had entries to parse; fall back to header only when entry counts were zero.
+    // Leg array counts are authoritative. The header fields (deposited_sf / borrowed_sf)
+    // are lazily refreshed by Save's oracle and can be stale after position closure.
+    // For collateral we fall back to the header only when deposits_len == 0 (obligation was
+    // never written). For borrows, 0 entries always means fully repaid → use 0.0, not the header.
     let final_collateral_usd = if deposits_len > 0 {
         legs.iter()
             .filter(|l| matches!(l.side, PositionSide::Collateral))
@@ -320,13 +319,16 @@ fn parse_obligation(
     } else {
         collateral_usd
     };
+    // borrows_len == 0 means every borrow slot is cleared → fully repaid.
+    // The WAD header (debt_usd) is lazily refreshed by Save's oracle and can
+    // still be non-zero after repayment, so trust the array count, not the header.
     let final_debt_usd = if borrows_len > 0 {
         legs.iter()
             .filter(|l| matches!(l.side, PositionSide::Borrow))
             .map(|l| l.value_usd)
             .sum()
     } else {
-        debt_usd
+        0.0
     };
 
     if final_collateral_usd == 0.0 && final_debt_usd == 0.0 {

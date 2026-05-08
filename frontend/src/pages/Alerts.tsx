@@ -1,420 +1,165 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
 import { DEMO_MODE } from '../api';
-import { EmptyState, ProtocolBadge, SeverityBadge } from '../components/ui';
+import { Button, Card, Chip, Eyebrow, ProtocolBadge, Skeleton, tokens } from '../components/sonar';
 import { useAlerts } from '../hooks';
 import { MOCK_ALERTS } from '../mockData';
 import type { Alert, Protocol, Severity } from '../types';
-import { alertWireToAlert, fmtPct, healthColor, severityColor, timeAgo } from '../utils';
+import { alertWireToAlert, fmtPct, timeAgo } from '../utils';
 
-const SEVERITIES: (Severity | 'All')[] = ['All', 'Info', 'Warning', 'Critical'];
-const PROTOCOLS: (Protocol | 'All')[] = ['All', 'Kamino', 'Save', 'Marginfi'];
+const SEVERITIES: Array<Severity | 'All'> = ['All', 'Info', 'Warning', 'Critical'];
+const PROTOCOLS: Array<Protocol | 'All'> = ['All', 'Kamino', 'Save', 'Marginfi'];
 
 export function Alerts() {
   const { publicKey } = useWallet();
   const wallet = publicKey?.toBase58() ?? null;
   const useLive = !DEMO_MODE && !!wallet;
   const alertsQ = useAlerts(useLive ? wallet : null);
-
   const source = useMemo(
     () => (useLive && alertsQ.data ? alertsQ.data.map(alertWireToAlert) : MOCK_ALERTS),
-    [useLive, alertsQ.data],
+    [alertsQ.data, useLive],
   );
-
   const [severity, setSeverity] = useState<Severity | 'All'>('All');
   const [protocol, setProtocol] = useState<Protocol | 'All'>('All');
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const filtered = source.filter((a) => {
     if (severity !== 'All' && a.severity !== severity) return false;
-    if (protocol !== 'All' && a.metadata?.protocol !== protocol) return false;
+    if (protocol !== 'All' && a.metadata.protocol !== protocol) return false;
     return true;
   });
 
   return (
-    <div style={{ padding: '88px 28px 60px', maxWidth: 860, margin: '0 auto' }}>
-      <h2
-        style={{
-          fontFamily: "'Fraunces', serif",
-          fontSize: 32,
-          fontWeight: 600,
-          color: '#F5F4EF',
-          letterSpacing: '-0.02em',
-          marginBottom: 6,
-        }}
-      >
-        Alerts
-      </h2>
-      <p
-        style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 14,
-          color: 'rgba(245,244,239,0.4)',
-          marginBottom: 28,
-        }}
-      >
-        AI-generated risk summaries for your positions.
-      </p>
+    <main style={{ padding: '64px 28px 72px', maxWidth: 980, margin: '0 auto' }}>
+      <PageHead title="Alerts" sub="AI risk summaries, liquidation warnings, and protocol events." />
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 10,
-          marginBottom: 28,
-          flexWrap: 'wrap',
-          alignItems: 'center',
-        }}
-      >
-        <span
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 12,
-            color: 'rgba(245,244,239,0.35)',
-            marginRight: 4,
-          }}
-        >
-          Severity
-        </span>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 22 }}>
         {SEVERITIES.map((s) => (
-          <FilterChip
-            key={s}
-            label={s}
-            active={severity === s}
-            color={s === 'All' ? null : severityColor(s)}
-            onClick={() => setSeverity(s)}
-          />
+          <Filter key={s} active={severity === s} onClick={() => setSeverity(s)}>{s}</Filter>
         ))}
-        <div
-          style={{
-            width: 1,
-            height: 20,
-            background: 'rgba(255,255,255,0.1)',
-            margin: '0 6px',
-          }}
-        />
-        <span
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 12,
-            color: 'rgba(245,244,239,0.35)',
-            marginRight: 4,
-          }}
-        >
-          Protocol
-        </span>
+        <span style={{ width: 1, height: 36, background: tokens.lineSoft }} />
         {PROTOCOLS.map((p) => (
-          <FilterChip
-            key={p}
-            label={p}
-            active={protocol === p}
-            color={null}
-            onClick={() => setProtocol(p)}
-          />
+          <Filter key={p} active={protocol === p} onClick={() => setProtocol(p)}>{p}</Filter>
         ))}
       </div>
 
-      {filtered.length === 0 ? (
-        <EmptyState />
+      {alertsQ.isLoading && useLive ? (
+        <div style={{ display: 'grid', gap: 12 }}>
+          {[1, 2, 3].map((i) => <Skeleton key={i} height={88} />)}
+        </div>
+      ) : filtered.length === 0 ? (
+        <Card pad={48} style={{ textAlign: 'center', background: 'var(--surface-1)' }}>
+          <h2 style={{ fontFamily: tokens.sans, fontSize: 20, margin: 0 }}>No alerts match this filter.</h2>
+        </Card>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {filtered.map((alert, idx) => (
-            <AlertCard
+        <div style={{ display: 'grid', gap: 12 }}>
+          {filtered.map((alert) => (
+            <AlertRow
               key={alert.id}
               alert={alert}
               expanded={expanded === alert.id}
               onToggle={() => setExpanded(expanded === alert.id ? null : alert.id)}
-              isFirst={idx === 0}
             />
           ))}
         </div>
       )}
+    </main>
+  );
+}
+
+function PageHead({ title, sub }: { title: string; sub: string }) {
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <h1 style={{ fontFamily: tokens.sans, fontSize: 34, fontWeight: 700, letterSpacing: '-0.025em', margin: 0 }}>{title}</h1>
+      <p style={{ fontFamily: tokens.sans, fontSize: 16, color: 'color-mix(in oklab, var(--ink) 57%, transparent)', marginTop: 8 }}>{sub}</p>
     </div>
   );
 }
 
-function FilterChip({
-  label,
-  active,
-  color,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  color: string | null;
-  onClick: () => void;
-}) {
+function Filter({ active, onClick, children }: { active: boolean; onClick: () => void; children: string }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       style={{
-        background: active
-          ? color
-            ? `${color}22`
-            : 'rgba(217,119,87,0.15)'
-          : 'rgba(255,255,255,0.05)',
-        border: `1px solid ${active ? (color ?? '#D97757') + '66' : 'rgba(255,255,255,0.1)'}`,
-        borderRadius: 100,
-        padding: '5px 14px',
+        minHeight: 36,
+        padding: '0 16px',
+        borderRadius: 999,
+        border: `1px solid ${active ? tokens.ink : tokens.lineSoft}`,
+        background: active ? tokens.ink : 'var(--surface-1)',
+        color: active ? tokens.paper : tokens.ink,
+        fontFamily: tokens.sans,
+        fontSize: 14,
         cursor: 'pointer',
-        fontFamily: "'Inter', sans-serif",
-        fontSize: 12,
-        fontWeight: 500,
-        color: active ? (color ?? '#D97757') : 'rgba(245,244,239,0.5)',
-        transition: 'all 0.15s',
+        transition: 'background 0.15s, transform 0.12s',
       }}
+      onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = 'var(--surface-2)'; }}
+      onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'var(--surface-1)'; }}
     >
-      {label}
+      {children}
     </button>
   );
 }
 
-function AlertCard({
-  alert,
-  expanded,
-  onToggle,
-  isFirst,
-}: {
-  alert: Alert;
-  expanded: boolean;
-  onToggle: () => void;
-  isFirst: boolean;
-}) {
-  const c = severityColor(alert.severity);
-  const proto = alert.metadata?.protocol;
+function AlertRow({ alert, expanded, onToggle }: { alert: Alert; expanded: boolean; onToggle: () => void }) {
+  const tone = alert.severity === 'Critical' ? 'critical' : alert.severity === 'Warning' ? 'watch' : 'neutral';
+  const color = alert.severity === 'Critical' ? tokens.rust : alert.severity === 'Warning' ? '#d99b2b' : '#64748b';
+  const proto = alert.metadata.protocol;
   return (
-    <div
-      style={{
-        background: '#2A2826',
-        borderRadius: 18,
-        border: '1px solid rgba(255,255,255,0.07)',
-        borderLeft: `3px solid ${c}`,
-        overflow: 'hidden',
-        boxShadow:
-          isFirst && alert.severity === 'Warning' ? `0 0 24px ${c}18` : 'none',
-      }}
-    >
-      <div
+    <Card pad={0} style={{ overflow: 'hidden', background: 'var(--surface-1)', borderLeft: `4px solid ${color}` }}>
+      <button
+        type="button"
         onClick={onToggle}
         style={{
+          width: '100%',
+          border: 0,
+          background: 'transparent',
           padding: '18px 22px',
-          cursor: 'pointer',
-          display: 'flex',
+          display: 'grid',
+          gridTemplateColumns: '140px 1fr auto',
           gap: 14,
-          alignItems: 'flex-start',
+          alignItems: 'start',
+          textAlign: 'left',
+          cursor: 'pointer',
         }}
       >
-        <div style={{ paddingTop: 1 }}>
-          <SeverityBadge severity={alert.severity} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              alignItems: 'center',
-              marginBottom: 4,
-              flexWrap: 'wrap',
-            }}
-          >
-            <span
-              style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 14,
-                fontWeight: 600,
-                color: '#F5F4EF',
-              }}
-            >
-              {alert.title}
-            </span>
-            {proto && <ProtocolBadge protocol={proto} />}
+        <Chip tone={tone}>{alert.severity}</Chip>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <strong style={{ fontFamily: tokens.sans, fontSize: 16 }}>{alert.title}</strong>
+            {proto ? <ProtocolBadge protocol={proto} size={22} /> : null}
           </div>
-          <p
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 13,
-              color: 'rgba(245,244,239,0.5)',
-              margin: 0,
-              lineHeight: 1.5,
-              display: expanded ? 'block' : '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: expanded ? 'visible' : 'hidden',
-            }}
-          >
+          <p style={{ fontFamily: tokens.sans, fontSize: 14, color: 'color-mix(in oklab, var(--ink) 57%, transparent)', lineHeight: 1.5, marginTop: 6 }}>
             {alert.message}
           </p>
         </div>
-        <div style={{ flexShrink: 0, textAlign: 'right' }}>
-          <div
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 11,
-              color: 'rgba(245,244,239,0.25)',
-              marginBottom: 6,
-            }}
-          >
-            {timeAgo(alert.created_at)}
-          </div>
-          <span style={{ color: 'rgba(245,244,239,0.25)', fontSize: 12 }}>
-            {expanded ? '▲' : '▼'}
-          </span>
+        <div style={{ fontFamily: tokens.sans, color: 'color-mix(in oklab, var(--ink) 46%, transparent)', fontSize: 13, whiteSpace: 'nowrap' }}>
+          {timeAgo(alert.created_at)} {expanded ? '▲' : '▼'}
         </div>
-      </div>
-
-      {expanded && (
-        <div
-          style={{
-            padding: '0 22px 20px',
-            borderTop: '1px solid rgba(255,255,255,0.06)',
-          }}
-        >
-          <div
-            style={{
-              paddingTop: 16,
-              display: 'flex',
-              gap: 24,
-              flexWrap: 'wrap',
-              marginBottom: 16,
-            }}
-          >
-            <Metric
-              label="Health at alert"
-              value={alert.health_score}
-              color={healthColor(alert.health_score)}
-              mono
-            />
-            <Metric
-              label="LTV at alert"
-              value={fmtPct(alert.ltv)}
-              color={alert.ltv > 0.7 ? '#D9604E' : '#E4A853'}
-              mono
-            />
-            <Metric
-              label="Time"
-              value={new Date(alert.created_at).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            />
+      </button>
+      {expanded ? (
+        <div style={{ borderTop: `1px solid ${tokens.lineSoft}`, padding: '18px 22px', display: 'grid', gap: 16 }}>
+          <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap' }}>
+            <Metric label="Health at alert" value={String(alert.health_score)} />
+            <Metric label="LTV at alert" value={fmtPct(alert.ltv)} />
+            <Metric label="Created" value={new Date(alert.created_at).toLocaleString()} />
           </div>
-
-          {alert.suggested_actions.length > 0 && (
-            <div>
-              <div
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 11,
-                  color: 'rgba(245,244,239,0.3)',
-                  letterSpacing: '0.07em',
-                  textTransform: 'uppercase',
-                  marginBottom: 10,
-                }}
-              >
-                Suggested Actions
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {alert.suggested_actions.map((action) => (
-                  <button
-                    key={action}
-                    style={{
-                      background: 'rgba(217,119,87,0.12)',
-                      border: '1px solid rgba(217,119,87,0.3)',
-                      borderRadius: 100,
-                      padding: '6px 14px',
-                      cursor: 'pointer',
-                      fontFamily: "'Inter', sans-serif",
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: '#D97757',
-                      transition: 'background 0.15s',
-                    }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = 'rgba(217,119,87,0.2)')
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = 'rgba(217,119,87,0.12)')
-                    }
-                  >
-                    {action}
-                  </button>
-                ))}
-              </div>
+          {alert.suggested_actions.length ? (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {alert.suggested_actions.map((action) => <Button key={action} size="sm">{action}</Button>)}
             </div>
-          )}
-
-          {alert.metadata && Object.keys(alert.metadata).length > 0 && (
-            <details style={{ marginTop: 14 }}>
-              <summary
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 11,
-                  color: 'rgba(245,244,239,0.3)',
-                  cursor: 'pointer',
-                  letterSpacing: '0.05em',
-                }}
-              >
-                Raw metadata
-              </summary>
-              <pre
-                style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: 11,
-                  color: 'rgba(245,244,239,0.4)',
-                  marginTop: 8,
-                  background: 'rgba(0,0,0,0.2)',
-                  padding: 12,
-                  borderRadius: 8,
-                  overflowX: 'auto',
-                }}
-              >
-                {JSON.stringify(alert.metadata, null, 2)}
-              </pre>
-            </details>
-          )}
+          ) : null}
         </div>
-      )}
-    </div>
+      ) : null}
+    </Card>
   );
 }
 
-function Metric({
-  label,
-  value,
-  color,
-  mono,
-}: {
-  label: string;
-  value: ReactNode;
-  color?: string;
-  mono?: boolean;
-}) {
+function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div
-        style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 10,
-          color: 'rgba(245,244,239,0.3)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.07em',
-          marginBottom: 4,
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          fontFamily: mono ? "'JetBrains Mono', monospace" : "'Inter', sans-serif",
-          fontSize: 16,
-          fontWeight: 600,
-          color: color ?? '#F5F4EF',
-        }}
-      >
-        {value}
-      </div>
+      <Eyebrow>{label}</Eyebrow>
+      <div style={{ fontFamily: tokens.mono, fontSize: 15, fontWeight: 600, marginTop: 4 }}>{value}</div>
     </div>
   );
 }

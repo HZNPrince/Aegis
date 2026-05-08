@@ -1,10 +1,7 @@
-//! aegis-executor
-//!
-//! Builds unsigned transactions that a user's wallet (Phantom etc.) can sign
-//! to act on a tripped guardrail. Kamino, Save, and Marginfi repay IXs are
-//! implemented here; each protocol's handler verifies the signer is the
-//! obligation/account authority, so delegate-based autonomous execution is
-//! not possible — all three paths produce an unsigned tx that the user signs.
+//! aegis-executor — builds unsigned transactions for user signatures to act on guard rules.
+//! Produces Versioned Transactions for Kamino, Save, and Marginfi repay instructions.
+//! Each protocol's handler verifies the signer is the obligation/account authority.
+//! Used by: aegis-api endpoint POST /api/intents/repay, which calls build_repay_tx().
 
 use aegis_core::types::{GuardRule, PositionLeg, PositionSide};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -24,6 +21,7 @@ pub mod guardrails;
 pub mod kamino;
 pub mod marginfi;
 pub mod save;
+pub mod wsol;
 
 /// Input to the executor: identifies which debt leg to repay, under which
 /// rule, and for how much. Amount is in native token units (pre-decimals).
@@ -112,6 +110,13 @@ pub async fn build_repay_tx(
     ctx: &ExecutorContext,
     req: &BuildRepayRequest,
 ) -> Result<UnsignedTx, ExecutorError> {
+    // Distinctive banner: if you don't see this in `cargo run -p aegis-server`
+    // stdout when clicking Repay, the *old* binary is running.
+    tracing::info!(
+        "█ [executor v3 — chain-fetched token_program + raw-offset bank decode] build_repay_tx: protocol={} wallet={} mint={} amount_native={}",
+        req.protocol, req.wallet, req.mint, req.amount_native
+    );
+
     guardrails::validate(req)?;
 
     let wallet = parse_pubkey(&req.wallet, "wallet")?;
@@ -120,7 +125,20 @@ pub async fn build_repay_tx(
     let obligation_or_account =
         parse_pubkey(&req.obligation_or_account, "obligation_or_account")?;
 
-    let ix: Instruction = match req.protocol.as_str() {
+    let mut ixs = Vec::new();
+    let is_wsol = req.mint == wsol::WSOL_MINT.to_string();
+    let user_token_account = if is_wsol {
+        // Derive WSOL ATA
+        derive_ata(&wallet, &wsol::WSOL_MINT, &wsol::SPL_TOKEN_PROGRAM_ID)
+    } else {
+        derive_ata(&wallet, &mint, &wsol::SPL_TOKEN_PROGRAM_ID)
+    };
+
+    if is_wsol {
+        ixs.extend(wsol::build_wsol_wrap_ixs(wallet, user_token_account, req.amount_native));
+    }
+
+    let proto_ixs: Vec<Instruction> = match req.protocol.as_str() {
         "Kamino" => {
             kamino::build_repay_ix(
                 &ctx.rpc,
@@ -157,13 +175,19 @@ pub async fn build_repay_tx(
         other => return Err(ExecutorError::UnknownProtocol(other.to_string())),
     };
 
+    ixs.extend(proto_ixs);
+
+    if is_wsol {
+        ixs.push(wsol::build_wsol_close_ix(wallet, user_token_account));
+    }
+
     let (recent_blockhash, last_valid_block_height) = ctx
         .rpc
         .get_latest_blockhash_with_commitment(CommitmentConfig::confirmed())
         .await
         .map_err(|e| ExecutorError::RpcFetch(format!("blockhash: {e}")))?;
 
-    let tx = wrap_unsigned(wallet, &[ix], recent_blockhash)?;
+    let tx = wrap_unsigned(wallet, &ixs, recent_blockhash)?;
     let bytes = bincode::serialize(&tx).map_err(|e| ExecutorError::Decode(e.to_string()))?;
 
     Ok(UnsignedTx {

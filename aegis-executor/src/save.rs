@@ -1,26 +1,9 @@
-//! Save (Solend fork) repay IX builder.
-//!
-//! Save has no Rust SDK. Instruction layout comes directly from Solend's
-//! open-source token-lending program:
-//!
-//! Tag: u8 = 11
-//! Args: { liquidity_amount: u64 }  (u64::MAX = repay all)
-//!
-//! Accounts (all unchanged in Save vs. Solend):
-//!   0. source_liquidity                 [writable]   user's ATA
-//!   1. destination_repay_reserve_supply [writable]   reserve.liquidity.supply_pubkey
-//!   2. repay_reserve                    [writable]
-//!   3. obligation                       [writable]
-//!   4. lending_market                   [readonly]
-//!   5. user_transfer_authority          [signer, readonly]
-//!   6. clock sysvar                     [readonly]
-//!   7. token_program                    [readonly]
-//!
-//! We parse the Reserve account at fixed byte offsets (Solend Pack layout) to
-//! pull lending_market + liquidity_mint + supply_pubkey. The full Reserve
-//! Pack layout is 619 bytes; the header we need lives in the first ~107.
+//! Save (Solend-fork) repay instruction builder — constructs repayObligationLiquidity transaction.
+//! No Rust SDK; instruction layout is from solend-sdk repayObligationLiquidity.ts.
+//! Parses Reserve layout at fixed offsets for lending_market, liquidity_mint, and supply_vault.
+//! Used by: executor's build_repay_tx() for Save protocol repayments.
 
-use crate::{derive_ata, ExecutorError};
+use crate::ExecutorError;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -28,11 +11,7 @@ use solana_sdk::{
     sysvar,
 };
 
-const SAVE_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo");
-
-const SPL_TOKEN_PROGRAM_ID: Pubkey =
-    solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const SAVE_PROGRAM_ID: Pubkey = solana_sdk::pubkey!("So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo");
 
 const REPAY_OBLIGATION_LIQUIDITY_TAG: u8 = 11;
 
@@ -43,12 +22,29 @@ const REPAY_OBLIGATION_LIQUIDITY_TAG: u8 = 11;
 //   [42..74]   liquidity.mint_pubkey Pubkey
 //   [74..75]   liquidity.mint_decimals u8
 //   [75..107]  liquidity.supply_pubkey Pubkey
+//   [107..139] liquidity.pyth_oracle_pubkey
+//   [139..171] liquidity.switchboard_oracle_pubkey
 //
 // Confirmed against Solend token-lending state layout. Reserve total size = 619.
 const RESERVE_LEN: usize = 619;
 const LENDING_MARKET_OFFSET: usize = 10;
 const LIQUIDITY_MINT_OFFSET: usize = 42;
 const LIQUIDITY_SUPPLY_OFFSET: usize = 75;
+const RESERVE_PYTH_OFFSET: usize = 107;
+const RESERVE_SWITCHBOARD_OFFSET: usize = 139;
+
+// LendingMarket Pack layout, relevant fields:
+//   [0..1]     version u8
+//   [1..2]     bump_seed u8
+//   [2..34]    owner Pubkey
+//   [34..66]   quote_currency [u8;32]
+//   [66..98]   token_program_id Pubkey
+//   [98..130]  oracle_program_id
+//   [130..162] switchboard_oracle_program_id
+//   [162..290] padding [u8;128]
+const LENDING_MARKET_LEN: usize = 290;
+const LM_TOKEN_PROGRAM_OFFSET: usize = 66;
+
 
 pub async fn build_repay_ix(
     rpc: &RpcClient,
@@ -57,7 +53,7 @@ pub async fn build_repay_ix(
     repay_reserve: Pubkey,
     expected_mint: Pubkey,
     liquidity_amount: u64,
-) -> Result<Instruction, ExecutorError> {
+) -> Result<Vec<Instruction>, ExecutorError> {
     let account = rpc
         .get_account(&repay_reserve)
         .await
@@ -81,7 +77,30 @@ pub async fn build_repay_ix(
         )));
     }
 
-    let source_liquidity = derive_ata(&wallet, &liquidity_mint, &SPL_TOKEN_PROGRAM_ID);
+    // Fetch LendingMarket and read its stored token_program_id. The on-chain
+    // repay processor fails (custom error 0x9) if accounts[7] != this value.
+    let lm_account = rpc
+        .get_account(&lending_market)
+        .await
+        .map_err(|e| ExecutorError::RpcFetch(format!("lending_market {lending_market}: {e}")))?;
+    if lm_account.data.len() < LENDING_MARKET_LEN {
+        return Err(ExecutorError::Decode(format!(
+            "save lending_market: expected ≥{LENDING_MARKET_LEN} bytes, got {}",
+            lm_account.data.len()
+        )));
+    }
+    let token_program_id = read_pubkey(&lm_account.data, LM_TOKEN_PROGRAM_OFFSET)?;
+
+    tracing::info!(
+        "[save repay v3] reserve={} lending_market={} token_program_id={} supply={} mint={}",
+        repay_reserve, lending_market, token_program_id, supply_pubkey, liquidity_mint
+    );
+
+    let source_liquidity = crate::derive_ata(&wallet, &liquidity_mint, &token_program_id);
+    tracing::info!(
+        "[save repay v3] source_liquidity_ata={} wallet={} amount={}",
+        source_liquidity, wallet, liquidity_amount
+    );
 
     // Instruction data: tag (1 byte) + liquidity_amount (8 bytes LE)
     let mut data = Vec::with_capacity(9);
@@ -95,15 +114,30 @@ pub async fn build_repay_ix(
         AccountMeta::new(obligation, false),
         AccountMeta::new_readonly(lending_market, false),
         AccountMeta::new_readonly(wallet, true),
-        AccountMeta::new_readonly(sysvar::clock::ID, false),
-        AccountMeta::new_readonly(SPL_TOKEN_PROGRAM_ID, false),
+        AccountMeta::new_readonly(token_program_id, false),
     ];
 
-    Ok(Instruction {
+    let repay_ix = Instruction {
         program_id: SAVE_PROGRAM_ID,
         accounts,
         data,
-    })
+    };
+
+    let pyth_oracle = read_pubkey(&account.data, RESERVE_PYTH_OFFSET)?;
+    let switchboard_oracle = read_pubkey(&account.data, RESERVE_SWITCHBOARD_OFFSET)?;
+
+    let refresh_ix = Instruction {
+        program_id: SAVE_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(repay_reserve, false),
+            AccountMeta::new_readonly(pyth_oracle, false),
+            AccountMeta::new_readonly(switchboard_oracle, false),
+            AccountMeta::new_readonly(sysvar::clock::ID, false),
+        ],
+        data: vec![3],
+    };
+
+    Ok(vec![refresh_ix, repay_ix])
 }
 
 fn read_pubkey(data: &[u8], offset: usize) -> Result<Pubkey, ExecutorError> {

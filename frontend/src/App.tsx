@@ -1,3 +1,6 @@
+// Main React application — handles wallet connection, routing, and page rendering.
+// Manages user session, wallet linking, and navigation between dashboard, positions, alerts, etc.
+
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -10,8 +13,11 @@ import { Alerts } from './pages/Alerts';
 import { Dashboard } from './pages/Dashboard';
 import { GuardRules } from './pages/GuardRules';
 import { Landing } from './pages/Landing';
+import { ProtocolDetail } from './pages/PositionDetail';
+import { Positions } from './pages/Positions';
 import { Settings } from './pages/Settings';
 import { Simulator } from './pages/Simulator';
+import { Telegram } from './pages/Telegram';
 
 function App() {
   const { connected, publicKey, disconnect } = useWallet();
@@ -20,82 +26,54 @@ function App() {
   const navigate = useNavigate();
   const linkWallet = useLinkWallet();
 
-  // On first connect, redirect to /dashboard and link wallet on backend.
   useEffect(() => {
-    if (connected && publicKey) {
-      if (location.pathname === '/') navigate('/dashboard');
-      linkWallet.mutate(publicKey.toBase58());
-    }
+    if (!connected || !publicKey) return;
+    const wallet = publicKey.toBase58();
+    if (location.pathname === '/') navigate('/dashboard');
+    // Only backfill once per wallet per browser session — refreshing the
+    // page should not retrigger a full RPC backfill on the server.
+    const key = `aegis-linked:${wallet}`;
+    if (sessionStorage.getItem(key)) return;
+    linkWallet.mutate(wallet, {
+      onSuccess: () => sessionStorage.setItem(key, String(Date.now())),
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, publicKey?.toBase58()]);
 
   const openConnect = () => setVisible(true);
-
   const handleDisconnect = async () => {
     await disconnect().catch(() => {});
     navigate('/');
   };
 
+  const isLanding = location.pathname === '/';
+
   return (
-    <div style={{ minHeight: '100vh', background: '#1F1E1D', color: '#F5F4EF' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--paper)', color: 'var(--ink)' }}>
       <Nav connected={connected} onConnect={openConnect} />
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={location.pathname}
-          initial={{ opacity: 0, y: 14 }}
-          animate={{
-            opacity: 1,
-            y: 0,
-            transition: { duration: 0.32, ease: [0.25, 0.46, 0.45, 0.94] },
-          }}
-          exit={{ opacity: 0, y: -8, transition: { duration: 0.18, ease: 'easeIn' } }}
-        >
-          <Routes location={location}>
-            <Route path="/" element={<Landing onConnect={openConnect} />} />
-            <Route
-              path="/dashboard"
-              element={
-                <Protected connected={connected}>
-                  <Dashboard />
-                </Protected>
-              }
-            />
-            <Route
-              path="/alerts"
-              element={
-                <Protected connected={connected}>
-                  <Alerts />
-                </Protected>
-              }
-            />
-            <Route
-              path="/rules"
-              element={
-                <Protected connected={connected}>
-                  <GuardRules />
-                </Protected>
-              }
-            />
-            <Route
-              path="/simulator"
-              element={
-                <Protected connected={connected}>
-                  <Simulator />
-                </Protected>
-              }
-            />
-            <Route
-              path="/settings"
-              element={
-                <Protected connected={connected}>
-                  <Settings onDisconnect={handleDisconnect} />
-                </Protected>
-              }
-            />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </motion.div>
-      </AnimatePresence>
+      <div style={{ paddingTop: isLanding ? 0 : 60 }}>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0, transition: { duration: 0.22, ease: [0.2, 0.8, 0.2, 1] } }}
+            exit={{ opacity: 0, y: -4, transition: { duration: 0.12 } }}
+          >
+            <Routes location={location}>
+              <Route path="/" element={<Landing onConnect={openConnect} />} />
+              <Route path="/dashboard" element={<Protected connected={connected}><Dashboard /></Protected>} />
+              <Route path="/positions" element={<Protected connected={connected}><Positions /></Protected>} />
+              <Route path="/protocol/:protocolName" element={<Protected connected={connected}><ProtocolDetail /></Protected>} />
+              <Route path="/alerts" element={<Protected connected={connected}><Alerts /></Protected>} />
+              <Route path="/rules" element={<Protected connected={connected}><GuardRules /></Protected>} />
+              <Route path="/telegram" element={<Protected connected={connected}><Telegram /></Protected>} />
+              <Route path="/simulator" element={<Protected connected={connected}><Simulator /></Protected>} />
+              <Route path="/settings" element={<Protected connected={connected}><Settings onDisconnect={handleDisconnect} /></Protected>} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </motion.div>
+        </AnimatePresence>
+      </div>
     </div>
   );
 }

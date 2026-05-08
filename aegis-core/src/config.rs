@@ -1,6 +1,12 @@
+//! Configuration loader — reads environment variables and initializes AegisConfig.
+//! Used by aegis-server at startup to configure gRPC, RPC, database, and alert thresholds.
+//!
+//! Override defaults by setting environment variables; unset variables fall back to sensible defaults.
+
 use std::env;
 
-/// Application configuration loaded from environment variables
+/// Application configuration loaded from environment variables.
+/// Initializes all runtime parameters: endpoints, thresholds, intervals, and credentials.
 pub struct AegisConfig {
     /// ParaFi Yellowstone gRPC endpoint
     pub grpc_endpoint: String,
@@ -16,9 +22,13 @@ pub struct AegisConfig {
     pub alert_threshold: f64,
     /// Polling interval in seconds
     pub poll_interval_secs: u64,
+    /// Heartbeat digest interval in hours. 0 disables the heartbeat dispatcher.
+    pub heartbeat_interval_hours: u64,
 }
 
 impl AegisConfig {
+    /// Load configuration from environment variables with sensible defaults.
+    /// DATABASE_URL is required; all others have fallbacks or are optional.
     pub fn from_env() -> Self {
         dotenv::dotenv().ok();
 
@@ -38,6 +48,10 @@ impl AegisConfig {
                 .unwrap_or_else(|_| "60".into())
                 .parse()
                 .expect("POLL_INTERVAL_SECS must be a number"),
+            heartbeat_interval_hours: env::var("HEARTBEAT_INTERVAL_HOURS")
+                .unwrap_or_else(|_| "4".into())
+                .parse()
+                .expect("HEARTBEAT_INTERVAL_HOURS must be a number"),
         }
     }
 }

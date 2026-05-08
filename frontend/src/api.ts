@@ -1,7 +1,12 @@
-// Typed API client — thin fetch wrapper; paths are relative to API_URL.
+// API client — thin typed wrapper around fetch calls to Aegis backend.
+// All paths are relative to API_URL env var; handles request/response serialization and error handling.
+
 import type {
   AlertRecordWire,
+  CreateRepayIntentRequest,
+  CreateRepayIntentResponse,
   GuardRuleWire,
+  IntentStatus,
   ScenarioRequest,
   ScenarioResponse,
   SystemStatus,
@@ -57,6 +62,13 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ chat_id: chatId }),
     }),
+  unlinkTelegram: (wallet: string) =>
+    request<void>(`/api/wallets/${wallet}/telegram`, { method: 'DELETE' }),
+  createTelegramLinkCode: (wallet: string) =>
+    request<{ code: string; expires_at: string; deep_link: string }>(
+      `/api/wallets/${wallet}/telegram/code`,
+      { method: 'POST' },
+    ),
   deleteGuardRule: (ruleId: string) =>
     request<void>(`/api/guard-rules/${ruleId}`, { method: 'DELETE' }),
   linkEmail: (wallet: string, email: string) =>
@@ -64,4 +76,16 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ email }),
     }),
+  createRepayIntent: (req: CreateRepayIntentRequest) =>
+    request<CreateRepayIntentResponse>('/api/intents/repay', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    }),
+  submitIntent: (intentId: string, signedTxBase64: string) =>
+    request<{ signature: string }>(`/api/intents/${intentId}/submit`, {
+      method: 'POST',
+      body: JSON.stringify({ signed_tx_base64: signedTxBase64 }),
+    }),
+  getIntent: (intentId: string) =>
+    request<IntentStatus>(`/api/intents/${intentId}`),
 };

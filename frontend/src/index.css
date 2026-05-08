@@ -7,14 +7,98 @@
 }
 
 :root {
-  --bg: #1f1e1d;
-  --surface: #2a2826;
-  --accent: #d97757;
-  --text: #f5f4ef;
-  --safe: #7da87b;
-  --warn: #e4a853;
-  --critical: #d9604e;
-  --info: #7aa2c2;
+  /* Sonar brand tokens — see brand.md */
+  --ink: #1a1a1a;
+  --ink-2: #2a2520;
+  --paper: #f6f4ee;
+  --paper-2: #efebe0;
+  --sand: #d9cdb4;
+  --sand-2: #c9bb9c;
+  --cobalt: #3b5bdb;
+  --cobalt-ink: #2a3fa8;
+  --rust: #c44536;
+  --rust-ink: #9b3327;
+  --moss: #5a6b47;
+  --line: rgba(26, 26, 26, 0.18);
+  --line-soft: rgba(26, 26, 26, 0.1);
+
+  /* Surfaces & depth — used by Card and section gradients */
+  --surface-1: #fbfaf6;
+  --surface-2: #f1ede2;
+  --surface-3: #e9e4d4;
+  --shadow-sm: 0 1px 2px rgba(26, 26, 26, 0.04), 0 1px 1px rgba(26, 26, 26, 0.03);
+  --shadow-md: 0 4px 12px -4px rgba(26, 26, 26, 0.10), 0 2px 4px rgba(26, 26, 26, 0.04);
+  --shadow-lg: 0 14px 32px -10px rgba(26, 26, 26, 0.14), 0 6px 12px -6px rgba(26, 26, 26, 0.06);
+  --grad-radial: radial-gradient(1100px 600px at 12% -10%, rgba(59, 91, 219, 0.06), transparent 60%),
+                 radial-gradient(900px 500px at 100% 0%, rgba(196, 69, 54, 0.04), transparent 55%);
+  --row-zebra: rgba(26, 26, 26, 0.025);
+  --row-hover: rgba(59, 91, 219, 0.05);
+
+  /* Dark nav */
+  --nav-bg: rgba(22, 22, 24, 0.96);
+  --nav-text: #f6f4ee;
+  --nav-text-dim: rgba(246, 244, 238, 0.48);
+  --nav-line: rgba(246, 244, 238, 0.1);
+
+  --serif: 'Fraunces', 'Times New Roman', serif;
+  --serif-italic: 'Instrument Serif', serif;
+  --sans: 'Geist', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --mono: 'Geist Mono', ui-monospace, monospace;
+
+  /* Legacy aliases — kept so existing dark components don't break while
+     the design Claude migrates pages one at a time. Remove once unused. */
+  --bg: var(--paper);
+  --surface: var(--paper-2);
+  --accent: var(--cobalt);
+  --text: var(--ink);
+  --safe: var(--moss);
+  --warn: var(--sand-2);
+  --critical: var(--rust);
+  --info: var(--cobalt);
+}
+
+/* ─── Dark theme overrides ───
+   Toggle by adding `data-theme="dark"` to <html>. Tokens cascade everywhere. */
+:root[data-theme='dark'] {
+  --ink: #f0ece2;
+  --ink-2: #c9c2b3;
+  --paper: #0e0e10;
+  --paper-2: #16161a;
+  --sand: #2a2622;
+  --sand-2: #3a342c;
+  --cobalt: #6e87ff;
+  --cobalt-ink: #4d68e8;
+  --rust: #e5705f;
+  --rust-ink: #c0533f;
+  --moss: #8aa172;
+  --line: rgba(246, 244, 238, 0.14);
+  --line-soft: rgba(246, 244, 238, 0.07);
+
+  --surface-1: #16161a;
+  --surface-2: #1c1c22;
+  --surface-3: #23232b;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 40px -12px rgba(0, 0, 0, 0.55);
+  --grad-radial: radial-gradient(1100px 600px at 12% -10%, rgba(110, 135, 255, 0.10), transparent 60%),
+                 radial-gradient(900px 500px at 100% 0%, rgba(229, 112, 95, 0.08), transparent 55%);
+  --row-zebra: rgba(255, 255, 255, 0.025);
+  --row-hover: rgba(110, 135, 255, 0.10);
+
+  --nav-bg: rgba(8, 8, 10, 0.92);
+  --nav-text: #f0ece2;
+  --nav-text-dim: rgba(240, 236, 226, 0.55);
+  --nav-line: rgba(240, 236, 226, 0.08);
+}
+
+:root[data-theme='dark'] .eyebrow {
+  color: rgba(240, 236, 226, 0.55) !important;
+}
+
+/* App-wide ambient gradient backdrop */
+body {
+  background: var(--paper) var(--grad-radial);
+  background-attachment: fixed;
 }
 
 html,
@@ -25,8 +109,32 @@ body {
 }
 
 body {
-  font-family: 'Inter', sans-serif;
+  font-family: var(--sans);
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'ss01' 1;
+}
+
+.num,
+.font-mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.font-serif {
+  font-family: var(--serif);
+}
+
+.font-serif-italic {
+  font-family: var(--serif-italic);
+  font-style: italic;
+}
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--ink) 55%, transparent);
 }
 
 #root {
@@ -41,18 +149,54 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(26, 26, 26, 0.12);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(26, 26, 26, 0.22);
 }
 
 ::selection {
-  background: rgba(217, 119, 87, 0.3);
-  color: #f5f4ef;
+  background: rgba(59, 91, 219, 0.2);
+  color: var(--ink);
 }
 
+/* ─── Sonar draw (logo arcs) ─── */
+@keyframes sonar-draw {
+  from {
+    stroke-dasharray: 200;
+    stroke-dashoffset: 200;
+  }
+  to {
+    stroke-dasharray: 200;
+    stroke-dashoffset: 0;
+  }
+}
+.sonar-draw {
+  animation: sonar-draw 700ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sonar-draw {
+    animation: none;
+  }
+}
+
+/* ─── Sonar pulse (live background) ─── */
+@keyframes sonar-pulse {
+  0% {
+    transform: scale(0.3);
+    opacity: 0.5;
+  }
+  70% {
+    opacity: 0.15;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+/* ─── Shimmer (skeleton loading) ─── */
 @keyframes shimmer {
   0% {
     background-position: -200% 0;
@@ -61,6 +205,8 @@ body {
     background-position: 200% 0;
   }
 }
+
+/* ─── Price ticker scroll ─── */
 @keyframes tickerScroll {
   0% {
     transform: translateX(0);
@@ -69,17 +215,21 @@ body {
     transform: translateX(-50%);
   }
 }
+
+/* ─── Ping (pulsing dot) ─── */
 @keyframes ping {
   0%,
   100% {
     transform: scale(1);
-    opacity: 0.6;
+    opacity: 0.7;
   }
   50% {
-    transform: scale(2.2);
+    transform: scale(2.8);
     opacity: 0;
   }
 }
+
+/* ─── Fade up ─── */
 @keyframes fadeUp {
   from {
     opacity: 0;
@@ -101,12 +251,47 @@ body {
   }
 }
 
+/* ─── Glow pulse for chart dot ─── */
+@keyframes glowPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 4px 2px rgba(196, 69, 54, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 12px 6px rgba(196, 69, 54, 0.25);
+  }
+}
+
+/* ─── Theme-switch view-transition (clip-path wave) ─── */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 1;
+}
+::view-transition-new(root) {
+  z-index: 2;
+}
+@keyframes theme-wave {
+  from {
+    clip-path: circle(0 at var(--theme-x, 100%) var(--theme-y, 0));
+  }
+  to {
+    clip-path: circle(var(--theme-r, 150vmax) at var(--theme-x, 100%) var(--theme-y, 0));
+  }
+}
+::view-transition-new(root) {
+  animation: theme-wave 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 input[type='range'] {
   -webkit-appearance: none;
   width: 100%;
   height: 4px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(26, 26, 26, 0.08);
   outline: none;
   cursor: pointer;
 }
@@ -115,13 +300,13 @@ input[type='range']::-webkit-slider-thumb {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #d97757;
+  background: var(--cobalt);
   cursor: pointer;
-  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.2);
+  box-shadow: 0 0 0 3px rgba(59, 91, 219, 0.2);
   transition: box-shadow 0.15s;
 }
 input[type='range']::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 0 6px rgba(217, 119, 87, 0.25);
+  box-shadow: 0 0 0 6px rgba(59, 91, 219, 0.25);
 }
 input[type='range']:focus {
   outline: none;
@@ -131,14 +316,14 @@ select {
   outline: none;
 }
 select:focus {
-  border-color: rgba(217, 119, 87, 0.5) !important;
+  border-color: rgba(59, 91, 219, 0.5) !important;
 }
 
 input {
   outline: none;
 }
 input:focus {
-  border-color: rgba(217, 119, 87, 0.5) !important;
+  border-color: rgba(59, 91, 219, 0.5) !important;
 }
 
 details summary {

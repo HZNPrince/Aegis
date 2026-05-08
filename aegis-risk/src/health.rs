@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+//! Health score calculation — computes wallet risk metrics from current positions and live prices.
+//! Main entry point is wallet_risk(), which returns a WalletRisk with health_score (0–100), LTV, and buffer.
+//! Used by: alert engine to evaluate wallets, API to return health snapshots, scenario simulator for shocks.
 
 use aegis_core::{
     state::AppState,

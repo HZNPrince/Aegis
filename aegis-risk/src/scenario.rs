@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+//! Scenario simulation — shock prices and measure impact on wallet risk.
+//! Takes base WalletRisk and applies collateral/debt shocks, then recalculates health.
+//! Used by: API endpoint POST /api/scenario for "what-if" analysis.
 
 use serde::{Deserialize, Serialize};
 

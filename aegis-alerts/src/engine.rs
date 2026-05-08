@@ -1,3 +1,7 @@
+//! Alert engine — evaluates wallet risk periodically and fires alerts when rules trip or risk changes significantly.
+//! Runs as a background task, polling monitored wallets at a configured interval (default 60s).
+//! Used by: aegis-server, which spawns this at startup and feeds it the AppState and dispatcher list.
+
 use std::{sync::Arc, time::Duration};
 
 use aegis_core::{
@@ -5,8 +9,15 @@ use aegis_core::{
     types::{AlertRecord, AlertSeverity, GuardRule, PositionSide, WalletRisk},
 };
 use aegis_risk::health::wallet_risk;
+use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::Row;
 use tracing::{error, info};
+
+/// Cap on concurrent wallet evaluations within a single poll cycle.
+/// Keeps DB pool + LLM rate limits sane while still being ~CONCURRENCY× faster
+/// than sequential. At 1000 wallets and 250ms avg per eval, sequential is 250s
+/// (longer than the poll); parallel-20 is ~12s.
+const ENGINE_CONCURRENCY: usize = 20;
 
 use crate::{
     dispatch::{Dispatcher, broadcast},
@@ -43,9 +54,9 @@ pub async fn evaluate_wallet(
         let chat_id = load_telegram_chat_id(&state, wallet).await.ok().flatten();
         let mut smart_alerts = Vec::new();
 
-        // Rapid health drop
+        // Rapid health drop — skip when wallet fully closed all positions (health→0 is expected).
         let health_drop = last.health_score - risk.health_score;
-        if health_drop >= 15.0 {
+        if health_drop >= 15.0 && !(risk.total_collateral_usd <= 0.0 && risk.total_debt_usd <= 0.0) {
             smart_alerts.push(AlertRecord {
                 id: None,
                 wallet: wallet.to_string(),
@@ -133,7 +144,7 @@ pub async fn evaluate_wallet(
         if total_collateral_native_now >= total_collateral_native_last && total_collateral_native_last > 0 {
             if last.total_collateral_usd > 0.0 {
                 let usd_drop_pct = (last.total_collateral_usd - risk.total_collateral_usd) / last.total_collateral_usd;
-                if usd_drop_pct > 0.05 {
+                if usd_drop_pct > 0.02 {
                     smart_alerts.push(AlertRecord {
                         id: None,
                         wallet: wallet.to_string(),
@@ -356,6 +367,9 @@ pub async fn evaluate_wallet(
             if !rule_cooldown_elapsed(rule, now) {
                 continue;
             }
+            // `daily_limit_usd` is historically misnamed — it's an alert *count* cap,
+            // not a USD spend cap. Kept as-is to avoid a DB migration; UI renders it as
+            // "Daily alert cap" with integer steps.
             if rule.daily_limit_usd > 0.0 {
                 if let Some(id) = &rule.id {
                     let count = daily_alert_count(&state, id).await.unwrap_or(0);
@@ -381,7 +395,13 @@ pub async fn evaluate_wallet(
         return Ok(None);
     }
 
-    let payload = llm.explain_risk(&risk).await?;
+    // Skip the LLM round-trip for Info-severity fires — fallback narration is
+    // sufficient and saves the API call. Reserve the LLM for Warning+/Critical.
+    let payload = if matches!(risk.severity, aegis_core::types::AlertSeverity::Info) {
+        crate::llm::fallback_explanation(&risk)
+    } else {
+        llm.explain_risk(&risk).await?
+    };
     let mut alert: AlertRecord = into_alert_record(risk, payload);
     alert.telegram_chat_id = load_telegram_chat_id(&state, &alert.wallet).await.ok().flatten();
     persist_alert(&state, &alert).await?;
@@ -403,6 +423,9 @@ pub async fn start_alert_engine(
         dispatchers.len()
     );
 
+    let llm = Arc::new(llm);
+    let dispatchers = Arc::new(dispatchers);
+
     loop {
         let wallets: Vec<String> = state
             .monitored_wallets
@@ -410,11 +433,37 @@ pub async fn start_alert_engine(
             .filter_map(|entry| (*entry.value()).then(|| entry.key().clone()))
             .collect();
 
-        for wallet in wallets {
-            if let Err(err) =
-                evaluate_wallet(state.clone(), &llm, &dispatchers, &wallet, alert_threshold).await
-            {
+        // Bounded concurrency: drive up to ENGINE_CONCURRENCY evaluations in flight.
+        // Replenish by draining one finished future each time we cross the cap.
+        type EvalFut = std::pin::Pin<Box<dyn std::future::Future<Output = (String, anyhow::Result<Option<AlertRecord>>)> + Send>>;
+        let mut in_flight: FuturesUnordered<EvalFut> = FuturesUnordered::new();
+        let mut iter = wallets.into_iter();
+
+        let spawn_one = |w: String,
+                         state: Arc<AppState>,
+                         llm: Arc<LlmClient>,
+                         dispatchers: Arc<Vec<Arc<dyn Dispatcher>>>|
+         -> EvalFut {
+            Box::pin(async move {
+                let res = evaluate_wallet(state, &llm, &dispatchers, &w, alert_threshold).await;
+                (w, res)
+            })
+        };
+
+        for _ in 0..ENGINE_CONCURRENCY {
+            if let Some(w) = iter.next() {
+                in_flight.push(spawn_one(w, state.clone(), llm.clone(), dispatchers.clone()));
+            } else {
+                break;
+            }
+        }
+
+        while let Some((wallet, res)) = in_flight.next().await {
+            if let Err(err) = res {
                 error!("[alerts] evaluation failed for {}: {}", wallet, err);
+            }
+            if let Some(next) = iter.next() {
+                in_flight.push(spawn_one(next, state.clone(), llm.clone(), dispatchers.clone()));
             }
         }
 
@@ -480,11 +529,7 @@ pub fn matching_guard_rules<'a>(risk: &WalletRisk, rules: &'a [GuardRule], last_
 }
 
 async fn load_telegram_chat_id(state: &AppState, wallet: &str) -> anyhow::Result<Option<i64>> {
-    let row = sqlx::query("SELECT telegram_chat_id FROM wallets WHERE pubkey = $1")
-        .bind(wallet)
-        .fetch_optional(&state.db_pool)
-        .await?;
-    Ok(row.and_then(|r| r.try_get::<Option<i64>, _>("telegram_chat_id").ok().flatten()))
+    Ok(state.telegram_chat_ids.get(wallet).map(|v| *v))
 }
 
 async fn daily_alert_count(state: &AppState, rule_id: &str) -> anyhow::Result<i64> {

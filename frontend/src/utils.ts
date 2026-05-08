@@ -1,3 +1,6 @@
+// Utility functions for formatting (USD, percentages, addresses, time) and color coding health scores.
+// Used throughout the frontend for consistent display of numeric data and status indicators.
+
 import type {
   AlertRecordWire,
   GuardRule,
@@ -67,6 +70,8 @@ export const walletRiskToHealth = (risk: WalletRisk): HealthSnapshot => {
           amount: leg.amount_ui,
           value_usd: leg.value_usd,
           updated_at: updatedAt,
+          reserve_or_bank: leg.reserve_or_bank,
+          amount_native: leg.amount_native,
         });
       }
       continue;

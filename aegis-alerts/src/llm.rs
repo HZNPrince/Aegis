@@ -1,3 +1,7 @@
+//! LLM integration — converts wallet risk snapshots into human-readable alert payloads.
+//! Uses OpenAI or OpenRouter APIs to generate alert titles, messages, and suggested actions.
+//! Used by: alert engine, which calls explain_risk() on every fired alert before dispatching.
+
 use aegis_core::types::{AlertRecord, AlertSeverity, WalletRisk};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};

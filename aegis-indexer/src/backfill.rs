@@ -1,18 +1,6 @@
-//! On-demand backfill — when a wallet is linked, fetch its current positions
-//! from all three protocols via RPC and push them through the same parser →
-//! DashMap → DB writer pipeline the gRPC stream uses.
-//!
-//! The trick: the parser is a pure function of (pubkey, bytes, slot). Backfill
-//! is just a different byte source.
-//!
-//! Owner/authority offsets (after 8-byte Anchor discriminator where applicable):
-//!   - Save Obligation:  offset 42 (owner)                — confirmed by parser.
-//!   - Marginfi Account: offset 40 (authority, 8 + 32)    — group then authority.
-//!   - Kamino Obligation: offset 64 (owner, 8+8+16+32)    — tag, last_update, lending_market, owner.
-//!
-//! We filter server-side by (dataSize + memcmp owner) and re-verify client-side
-//! via the parser — if an offset is wrong we'll see a 0-result backfill and
-//! catch it fast.
+//! Wallet backfill — fetches all positions for a newly-linked wallet from on-chain via RPC.
+//! Pushes positions through the same parser → DashMap → DB writer pipeline as the gRPC stream.
+//! Used by: API endpoint POST /api/wallets/:wallet, triggered when a wallet is first linked.
 
 use std::{str::FromStr, sync::Arc};
 

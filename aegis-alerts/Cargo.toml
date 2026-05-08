@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 aegis-core = { path = "../aegis-core" }
 aegis-risk = { path = "../aegis-risk" }
+futures = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

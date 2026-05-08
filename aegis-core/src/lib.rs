@@ -1,7 +1,6 @@
-//! Aegis Core — shared types, errors, configuration, and state.
-//!
-//! This crate is the foundation all other aegis crates depend on.
-//! It contains no business logic — only definitions and utilities.
+//! aegis-core — shared foundation for all Aegis crates.
+//! Provides types (Position, WalletRisk, PositionUpdate), configuration, error handling,
+//! concurrent application state, and symbol lookup utilities. No business logic — only definitions.
 
 pub mod config;
 pub mod error;

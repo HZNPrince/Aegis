@@ -1,6 +1,10 @@
+//! Error types — unified error handling across all Aegis subsystems.
+//! All subsystems use AegisError and AegisResult for consistent error propagation and logging.
+
 use thiserror::Error;
 
 /// Unified error type for the Aegis system.
+/// Covers RPC failures, gRPC stream errors, deserialization, database errors, and protocol-specific issues.
 #[derive(Error, Debug)]
 pub enum AegisError {
     #[error("RPC error: {0}")]

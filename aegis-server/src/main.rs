@@ -1,6 +1,6 @@
-//! Aegis Server — runs the full pipeline: oracle → price poller → gRPC indexer → API server
-//!
-//! Run with: cargo run -p aegis-server
+//! Aegis Server — orchestrates the complete risk monitoring pipeline for Solana lending positions.
+//! Startup sequence: config → DB → gRPC indexer → oracle → API server → alert engine → gRPC supervisor.
+//! All subsystems share AppState, enabling lock-free concurrent updates and queries.
 
 use std::sync::Arc;
 
@@ -56,6 +56,21 @@ async fn main() -> anyhow::Result<()> {
     }
     info!("[boot] rehydrated {} monitored wallets from DB", rehydrated);
 
+    // Rehydrate Telegram chat-id cache so the alert engine doesn't hit the DB
+    // on every fire to look up routing.
+    let chat_rows = sqlx::query(
+        "SELECT pubkey, telegram_chat_id FROM wallets WHERE telegram_chat_id IS NOT NULL",
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+    let chat_count = chat_rows.len();
+    for row in chat_rows {
+        let pubkey: String = row.try_get("pubkey")?;
+        let chat_id: i64 = row.try_get("telegram_chat_id")?;
+        state.telegram_chat_ids.insert(pubkey, chat_id);
+    }
+    info!("[boot] rehydrated {} telegram chat ids", chat_count);
+
     let token_mints =
         aegis_indexer::oracle::discover_mints(&config.rpc_endpoint, &state).await?;
     info!("[boot] oracle discovery complete: {} mints", token_mints.len());
@@ -84,6 +99,9 @@ async fn main() -> anyhow::Result<()> {
     ));
     info!("[boot] save reserve refresh loop online");
 
+    tokio::spawn(aegis_indexer::oracle::start_sanctum_lst_poller(state.clone()));
+    info!("[boot] sanctum LST price poller online");
+
     tokio::spawn(aegis_api::start_server(state.clone()));
     info!("[boot] api server online");
 
@@ -103,6 +121,15 @@ async fn main() -> anyhow::Result<()> {
         config.alert_threshold,
     ));
     info!("[boot] alert engine online");
+
+    tokio::spawn(aegis_alerts::heartbeat::start_heartbeat_loop(
+        state.clone(),
+        config.heartbeat_interval_hours,
+    ));
+    info!(
+        "[boot] heartbeat dispatcher spawned (interval={}h)",
+        config.heartbeat_interval_hours
+    );
 
     info!("[boot] all subsystems up — starting gRPC supervisor");
 

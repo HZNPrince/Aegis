@@ -1,11 +1,7 @@
-//! Alert delivery — the contract any notification channel must satisfy.
-//!
-//! The engine doesn't know or care where an alert goes. It hands every
-//! fired alert to each registered `Dispatcher`. A dispatcher that errors
-//! out gets its failure logged; the rest still run.
-//!
-//! Adding a new channel (Telegram, Slack, webhook) = one new type that
-//! impls this trait. No engine changes required.
+//! Alert dispatcher trait and implementations — abstracts alert delivery to multiple channels.
+//! Adding a new channel (Slack, webhook, email) requires implementing the Dispatcher trait only.
+//! Built-in dispatchers: LogDispatcher (stdout), TelegramDispatcher (bot API), EmailDispatcher (SMTP).
+//! Used by: alert engine to send alerts, and by aegis-server to register available channels at startup.
 
 use aegis_core::types::{AlertRecord, AlertSeverity};
 use async_trait::async_trait;

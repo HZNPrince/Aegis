@@ -1,54 +1,30 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import { DEMO_MODE } from '../api';
-import { Card, EmptyState, ProtocolBadge, Toggle } from '../components/ui';
+import { Button, Card, Chip, Eyebrow, ProtocolBadge, Skeleton, tokens } from '../components/sonar';
 import { useDeleteGuardRule, useGuardRules, useUpsertGuardRule } from '../hooks';
 import { MOCK_GUARD_RULES, MOCK_WALLET_FULL } from '../mockData';
-import type { ActionKind, GuardRule, GuardRuleWire, Protocol, TriggerKind } from '../types';
+import type { GuardRule, GuardRuleWire } from '../types';
 import { fmtUsd, guardRuleWireToRule, timeAgo } from '../utils';
-
-const STEPS = ['Trigger', 'Action', 'Guardrails', 'Review'] as const;
-
-interface RuleForm {
-  trigger_kind: TriggerKind;
-  trigger_value: number;
-  action_kind: ActionKind;
-  action_token: string;
-  action_amount_usd: number;
-  max_usd_per_action: number;
-  daily_limit_usd: number;
-  cooldown_seconds: number;
-  protocol: Protocol | null;
-  is_active: boolean;
-}
 
 export function GuardRules() {
   const { publicKey } = useWallet();
   const wallet = publicKey?.toBase58() ?? null;
-  const useLive = !DEMO_MODE && !!wallet;
   const walletAddr = wallet ?? MOCK_WALLET_FULL;
-
+  const useLive = !DEMO_MODE && !!wallet;
   const rulesQ = useGuardRules(useLive ? wallet : null);
   const upsert = useUpsertGuardRule();
   const deleteRule = useDeleteGuardRule();
-
-  const [localRules, setLocalRules] = useState<GuardRule[]>(MOCK_GUARD_RULES);
+  const [rules, setRules] = useState<GuardRule[]>(MOCK_GUARD_RULES);
   const [showModal, setShowModal] = useState(false);
-  const isPremium = false;
 
   useEffect(() => {
-    if (useLive && rulesQ.data) {
-      setLocalRules(rulesQ.data.map(guardRuleWireToRule));
-    } else if (!useLive) {
-      setLocalRules(MOCK_GUARD_RULES);
-    }
-  }, [useLive, rulesQ.data]);
+    if (useLive && rulesQ.data) setRules(rulesQ.data.map(guardRuleWireToRule));
+    if (!useLive) setRules(MOCK_GUARD_RULES);
+  }, [rulesQ.data, useLive]);
 
-  const rules = localRules;
-
-  const ruleToWire = (r: GuardRule): GuardRuleWire => ({
-    id: r.id.startsWith('rule-') || r.id.startsWith('gr') ? undefined : r.id,
+  const toWire = (r: GuardRule): GuardRuleWire => ({
+    id: r.id.startsWith('gr') ? undefined : r.id,
     wallet: r.wallet,
     protocol: r.protocol,
     trigger_kind: r.trigger_kind,
@@ -63,78 +39,35 @@ export function GuardRules() {
     last_fired_at: r.last_fired_at,
   });
 
-  const toggleRule = (id: string) => {
-    const rule = rules.find((r) => r.id === id);
-    if (!rule) return;
+  const toggle = (rule: GuardRule) => {
     const next = { ...rule, is_active: !rule.is_active };
-    setLocalRules((r) => r.map((x) => (x.id === id ? next : x)));
-    if (useLive) upsert.mutate(ruleToWire(next));
+    setRules((rows) => rows.map((r) => (r.id === rule.id ? next : r)));
+    if (useLive) upsert.mutate(toWire(next));
   };
 
   return (
-    <div style={{ padding: '88px 28px 60px', maxWidth: 860, margin: '0 auto' }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          marginBottom: 28,
-        }}
-      >
+    <main style={{ padding: '64px 28px 72px', maxWidth: 980, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end', gap: 20, marginBottom: 28 }}>
         <div>
-          <h2
-            style={{
-              fontFamily: "'Fraunces', serif",
-              fontSize: 32,
-              fontWeight: 600,
-              color: '#F5F4EF',
-              letterSpacing: '-0.02em',
-              marginBottom: 6,
-            }}
-          >
-            Guard Rules
-          </h2>
-          <p
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 14,
-              color: 'rgba(245,244,239,0.4)',
-            }}
-          >
-            Automated actions that execute when thresholds are breached.
+          <h1 style={{ fontFamily: tokens.sans, fontSize: 34, fontWeight: 700, letterSpacing: '-0.025em', margin: 0 }}>Guardrails</h1>
+          <p style={{ fontFamily: tokens.sans, fontSize: 16, color: 'color-mix(in oklab, var(--ink) 57%, transparent)', marginTop: 8 }}>
+            Automated thresholds for alerts, repayments, and position defense.
           </p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          style={{
-            background: '#D97757',
-            border: 'none',
-            cursor: 'pointer',
-            padding: '11px 22px',
-            borderRadius: 100,
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 13,
-            fontWeight: 600,
-            color: '#1F1E1D',
-            flexShrink: 0,
-          }}
-        >
-          + New Rule
-        </button>
+        <Button variant="danger" onClick={() => setShowModal(true)}>+ New Rule</Button>
       </div>
 
-      {rules.length === 0 ? (
-        <EmptyState text="No guard rules yet. Create one to stay protected." />
+      {rulesQ.isLoading && useLive ? (
+        <div style={{ display: 'grid', gap: 12 }}>{[1, 2, 3].map((i) => <Skeleton key={i} height={120} />)}</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'grid', gap: 14 }}>
           {rules.map((rule) => (
             <RuleCard
               key={rule.id}
               rule={rule}
-              isPremium={isPremium}
-              onToggle={() => toggleRule(rule.id)}
+              onToggle={() => toggle(rule)}
               onDelete={() => {
-                setLocalRules((r) => r.filter((x) => x.id !== rule.id));
+                setRules((rows) => rows.filter((r) => r.id !== rule.id));
                 if (useLive) deleteRule.mutate(rule.id);
               }}
             />
@@ -142,251 +75,72 @@ export function GuardRules() {
         </div>
       )}
 
-      {!isPremium && (
-        <div
-          style={{
-            marginTop: 28,
-            background: 'rgba(217,119,87,0.06)',
-            border: '1px solid rgba(217,119,87,0.2)',
-            borderRadius: 18,
-            padding: '20px 24px',
-            display: 'flex',
-            gap: 16,
-            alignItems: 'center',
-            boxShadow: '0 0 32px rgba(217,119,87,0.08)',
-          }}
-        >
-          <div style={{ fontSize: 22 }}>🔒</div>
-          <div style={{ flex: 1 }}>
-            <div
-              style={{
-                fontFamily: "'Fraunces', serif",
-                fontSize: 16,
-                fontWeight: 500,
-                color: '#F5F4EF',
-                marginBottom: 4,
-              }}
-            >
-              Unlock autonomous execution
-            </div>
-            <div
-              style={{
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 13,
-                color: 'rgba(245,244,239,0.45)',
-              }}
-            >
-              Upgrade to Aegis Pro to enable AddCollateral, RepayDebt, and Deleverage actions.
-            </div>
+      <Card pad={20} style={{ marginTop: 22, background: 'rgba(196,69,54,0.05)', borderColor: 'rgba(196,69,54,0.22)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center' }}>
+          <div>
+            <strong style={{ fontFamily: tokens.sans }}>Autonomous execution</strong>
+            <p style={{ fontFamily: tokens.sans, color: 'color-mix(in oklab, var(--ink) 57%, transparent)', marginTop: 4 }}>
+              Repay and deleverage actions require Pro and wallet approval safeguards.
+            </p>
           </div>
-          <button
-            style={{
-              background: '#D97757',
-              border: 'none',
-              cursor: 'pointer',
-              padding: '10px 20px',
-              borderRadius: 100,
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#1F1E1D',
-              flexShrink: 0,
-            }}
-          >
-            Upgrade
-          </button>
+          <Button>Upgrade</Button>
         </div>
-      )}
+      </Card>
 
-      {showModal && (
+      {showModal ? (
         <NewRuleModal
-          isPremium={isPremium}
+          wallet={walletAddr}
           onClose={() => setShowModal(false)}
-          onSave={(form) => {
-            const newRule: GuardRule = {
-              id: `gr${Date.now()}`,
-              wallet: walletAddr,
-              protocol: form.protocol,
-              trigger_kind: form.trigger_kind,
-              trigger_value: form.trigger_value,
-              action_kind: form.action_kind,
-              action_token: form.action_kind === 'NotifyOnly' ? null : form.action_token,
-              action_amount_usd:
-                form.action_kind === 'NotifyOnly' ? null : form.action_amount_usd,
-              max_usd_per_action: form.max_usd_per_action,
-              daily_limit_usd: form.daily_limit_usd,
-              cooldown_seconds: form.cooldown_seconds,
-              is_active: form.is_active,
-              last_fired_at: null,
-            };
-            setLocalRules((r) => [...r, newRule]);
-            if (useLive) upsert.mutate(ruleToWire(newRule));
+          onSave={(rule) => {
+            setRules((rows) => [rule, ...rows]);
+            if (useLive) upsert.mutate(toWire(rule));
             setShowModal(false);
           }}
         />
-      )}
-    </div>
+      ) : null}
+    </main>
   );
 }
 
-function RuleCard({
-  rule,
-  isPremium,
-  onToggle,
-  onDelete,
-}: {
-  rule: GuardRule;
-  isPremium: boolean;
-  onToggle: () => void;
-  onDelete: () => void;
-}) {
-  const isAutoAction = rule.action_kind !== 'NotifyOnly';
-  const locked = isAutoAction && !isPremium;
-
-  const triggerLabel: string =
-    rule.trigger_kind === 'HealthBelow'
-      ? `Health drops below ${rule.trigger_value}`
-      : rule.trigger_kind === 'LtvAbove'
-        ? `LTV exceeds ${(rule.trigger_value * 100).toFixed(0)}%`
-        : `Debt exceeds ${fmtUsd(rule.trigger_value)}`;
-
-  const actionLabel: string =
-    rule.action_kind === 'NotifyOnly'
-      ? 'Send notification'
+function RuleCard({ rule, onToggle, onDelete }: { rule: GuardRule; onToggle: () => void; onDelete: () => void }) {
+  const trigger = rule.trigger_kind === 'HealthBelow'
+    ? `When health drops below ${rule.trigger_value}`
+    : rule.trigger_kind === 'LtvAbove'
+      ? `When LTV exceeds ${(rule.trigger_value * 100).toFixed(0)}%`
+      : rule.trigger_kind === 'DebtAboveUsd'
+        ? `When debt exceeds ${fmtUsd(rule.trigger_value)}`
+        : `When health drops ${(rule.trigger_value * 100).toFixed(0)}%`;
+  const action = rule.action_kind === 'NotifyOnly'
+    ? 'Send notification'
+    : rule.action_kind === 'RepayDebt'
+      ? `Repay ${fmtUsd(rule.action_amount_usd)} ${rule.action_token ?? ''}`
       : rule.action_kind === 'AddCollateral'
         ? `Add ${rule.action_token ?? 'collateral'} (${fmtUsd(rule.action_amount_usd)})`
-        : rule.action_kind === 'RepayDebt'
-          ? `Repay ${rule.action_amount_usd ? fmtUsd(rule.action_amount_usd) : ''} ${rule.action_token ?? 'debt'}`
-          : 'Deleverage position';
+        : 'Deleverage position';
+  const locked = rule.action_kind !== 'NotifyOnly';
 
   return (
-    <Card style={{ padding: '20px 24px', opacity: rule.is_active ? 1 : 0.6 }}>
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center' }}>
-          <Toggle checked={rule.is_active && !locked} onChange={onToggle} />
-          <button
-            onClick={onDelete}
-            title="Delete rule"
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'rgba(245,244,239,0.25)',
-              fontSize: 14,
-              lineHeight: 1,
-              padding: 2,
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#D9604E'; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = 'rgba(245,244,239,0.25)'; }}
-          >
-            ✕
-          </button>
+    <Card pad={22} style={{ background: 'var(--surface-1)', opacity: rule.is_active ? 1 : 0.62 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '76px 1fr auto', gap: 20, alignItems: 'start' }}>
+        <div style={{ display: 'grid', justifyItems: 'center', gap: 12 }}>
+          <Switch checked={rule.is_active} onClick={onToggle} />
+          <button type="button" onClick={onDelete} aria-label="Delete rule" style={{ border: 0, background: 'transparent', color: 'color-mix(in oklab, var(--ink) 35%, transparent)', cursor: 'pointer', fontSize: 20 }}>×</button>
         </div>
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              alignItems: 'center',
-              marginBottom: 10,
-              flexWrap: 'wrap',
-            }}
-          >
-            {rule.protocol && <ProtocolBadge protocol={rule.protocol} />}
-            {locked && (
-              <span
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 11,
-                  color: '#D97757',
-                  background: 'rgba(217,119,87,0.12)',
-                  border: '1px solid rgba(217,119,87,0.25)',
-                  borderRadius: 100,
-                  padding: '2px 9px',
-                }}
-              >
-                🔒 Pro
-              </span>
-            )}
+        <div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+            {rule.protocol ? <ProtocolBadge protocol={rule.protocol} size={22} /> : <Chip>All protocols</Chip>}
+            {locked ? <Chip tone="watch">Pro</Chip> : null}
           </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: '10px 24px',
-              marginBottom: 14,
-            }}
-          >
-            <div>
-              <Label>Trigger</Label>
-              <div
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 13,
-                  color: '#F5F4EF',
-                }}
-              >
-                When {triggerLabel}
-              </div>
-            </div>
-            <div>
-              <Label>Action</Label>
-              <div
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 13,
-                  color: locked ? '#D97757' : '#F5F4EF',
-                }}
-              >
-                {actionLabel}
-              </div>
-            </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+            <Block label="Trigger" value={trigger} />
+            <Block label="Action" value={action} accent={locked} />
           </div>
-
-          <div
-            style={{
-              display: 'flex',
-              gap: 20,
-              flexWrap: 'wrap',
-              borderTop: '1px solid rgba(255,255,255,0.06)',
-              paddingTop: 12,
-            }}
-          >
-            {[
-              {
-                label: 'Max/action',
-                value: rule.max_usd_per_action > 0 ? fmtUsd(rule.max_usd_per_action) : '—',
-              },
-              {
-                label: 'Daily limit',
-                value: rule.daily_limit_usd > 0 ? fmtUsd(rule.daily_limit_usd) : '—',
-              },
-              {
-                label: 'Cooldown',
-                value:
-                  rule.cooldown_seconds >= 3600
-                    ? `${rule.cooldown_seconds / 3600}h`
-                    : `${rule.cooldown_seconds / 60}m`,
-              },
-              {
-                label: 'Last fired',
-                value: rule.last_fired_at ? timeAgo(rule.last_fired_at) : 'Never',
-              },
-            ].map(({ label, value }) => (
-              <div key={label}>
-                <Label>{label}</Label>
-                <div
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 12,
-                    color: 'rgba(245,244,239,0.6)',
-                  }}
-                >
-                  {value}
-                </div>
-              </div>
-            ))}
+          <div style={{ height: 1, background: tokens.lineSoft, margin: '18px 0' }} />
+          <div style={{ display: 'flex', gap: 34, flexWrap: 'wrap' }}>
+            <Metric label="Max/action" value={rule.max_usd_per_action > 0 ? fmtUsd(rule.max_usd_per_action) : '—'} />
+            <Metric label="Daily cap" value={rule.daily_limit_usd > 0 ? `${rule.daily_limit_usd} alerts` : '—'} />
+            <Metric label="Cooldown" value={rule.cooldown_seconds >= 3600 ? `${rule.cooldown_seconds / 3600}h` : `${rule.cooldown_seconds / 60}m`} />
+            <Metric label="Last fired" value={rule.last_fired_at ? timeAgo(rule.last_fired_at) : 'Never'} />
           </div>
         </div>
       </div>
@@ -394,511 +148,89 @@ function RuleCard({
   );
 }
 
-function Label({ children }: { children: ReactNode }) {
+function Switch({ checked, onClick }: { checked: boolean; onClick: () => void }) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={checked}
       style={{
-        fontFamily: "'Inter', sans-serif",
-        fontSize: 10,
-        color: 'rgba(245,244,239,0.3)',
-        textTransform: 'uppercase',
-        letterSpacing: '0.07em',
-        marginBottom: 4,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function NewRuleModal({
-  isPremium,
-  onClose,
-  onSave,
-}: {
-  isPremium: boolean;
-  onClose: () => void;
-  onSave: (form: RuleForm) => void;
-}) {
-  const [step, setStep] = useState(0);
-  const [form, setForm] = useState<RuleForm>({
-    trigger_kind: 'HealthBelow',
-    trigger_value: 60,
-    action_kind: 'NotifyOnly',
-    action_token: 'USDC',
-    action_amount_usd: 300,
-    max_usd_per_action: 300,
-    daily_limit_usd: 600,
-    cooldown_seconds: 3600,
-    protocol: null,
-    is_active: true,
-  });
-
-  const set = <K extends keyof RuleForm>(k: K, v: RuleForm[K]) =>
-    setForm((f) => ({ ...f, [k]: v }));
-  const isAutoAction = form.action_kind !== 'NotifyOnly';
-  const locked = isAutoAction && !isPremium;
-
-  const triggerSummary =
-    form.trigger_kind === 'HealthBelow'
-      ? `Health < ${form.trigger_value}`
-      : form.trigger_kind === 'LtvAbove'
-        ? `LTV > ${(form.trigger_value * 100).toFixed(0)}%`
-        : `Debt > ${fmtUsd(form.trigger_value)}`;
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 200,
+        width: 46,
+        height: 26,
+        border: 0,
+        borderRadius: 999,
+        background: checked ? '#d27a5c' : '#e6e2d8',
+        padding: 3,
+        cursor: 'pointer',
         display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'center',
-        background: 'rgba(0,0,0,0.6)',
-        backdropFilter: 'blur(8px)',
+        justifyContent: checked ? 'flex-end' : 'flex-start',
       }}
-      onClick={onClose}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: '#2A2826',
-          borderRadius: '24px 24px 0 0',
-          border: '1px solid rgba(255,255,255,0.1)',
-          width: '100%',
-          maxWidth: 600,
-          padding: '28px 28px 40px',
-          boxShadow: '0 -16px 64px rgba(0,0,0,0.5)',
-          animation: 'slideUp 0.3s cubic-bezier(0.34,1.56,0.64,1) both',
-        }}
-      >
-        <div style={{ display: 'flex', gap: 6, marginBottom: 28 }}>
-          {STEPS.map((s, i) => (
-            <div
-              key={s}
-              style={{
-                flex: 1,
-                height: 3,
-                borderRadius: 3,
-                background: i <= step ? '#D97757' : 'rgba(255,255,255,0.1)',
-                transition: 'background 0.3s',
-              }}
-            />
-          ))}
-        </div>
+      <span style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--surface-1)', boxShadow: '0 1px 4px rgba(0,0,0,.16)' }} />
+    </button>
+  );
+}
 
-        <div
-          style={{
-            fontFamily: "'Fraunces', serif",
-            fontSize: 22,
-            fontWeight: 600,
-            color: '#F5F4EF',
-            marginBottom: 4,
-          }}
-        >
-          {STEPS[step]}
-        </div>
-        <div
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 13,
-            color: 'rgba(245,244,239,0.4)',
-            marginBottom: 24,
-          }}
-        >
-          {
-            [
-              'Define when this rule fires',
-              'What should Aegis do?',
-              'Set spending limits',
-              'Review and activate',
-            ][step]
-          }
-        </div>
-
-        {step === 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <WizardSelect
-              label="Trigger type"
-              value={form.trigger_kind}
-              onChange={(v) => set('trigger_kind', v as TriggerKind)}
-              options={[
-                ['HealthBelow', 'Health drops below'],
-                ['LtvAbove', 'LTV exceeds'],
-                ['DebtAboveUsd', 'Debt exceeds USD'],
-              ]}
-            />
-            <WizardSlider
-              label={
-                form.trigger_kind === 'HealthBelow'
-                  ? 'Health threshold'
-                  : form.trigger_kind === 'LtvAbove'
-                    ? 'LTV threshold (%)'
-                    : 'Debt threshold (USD)'
-              }
-              value={form.trigger_value}
-              min={
-                form.trigger_kind === 'DebtAboveUsd'
-                  ? 100
-                  : form.trigger_kind === 'LtvAbove'
-                    ? 0.5
-                    : 10
-              }
-              max={
-                form.trigger_kind === 'DebtAboveUsd'
-                  ? 10000
-                  : form.trigger_kind === 'LtvAbove'
-                    ? 0.95
-                    : 90
-              }
-              step={
-                form.trigger_kind === 'DebtAboveUsd'
-                  ? 50
-                  : form.trigger_kind === 'LtvAbove'
-                    ? 0.01
-                    : 1
-              }
-              format={(v) =>
-                form.trigger_kind === 'LtvAbove'
-                  ? `${(v * 100).toFixed(0)}%`
-                  : form.trigger_kind === 'DebtAboveUsd'
-                    ? fmtUsd(v)
-                    : String(v)
-              }
-              onChange={(v) => set('trigger_value', v)}
-            />
-            <WizardSelect
-              label="Protocol (optional)"
-              value={form.protocol ?? ''}
-              onChange={(v) => set('protocol', v === '' ? null : (v as Protocol))}
-              options={[
-                ['', 'All protocols'],
-                ['Kamino', 'Kamino'],
-                ['Save', 'Save'],
-                ['Marginfi', 'Marginfi'],
-              ]}
-            />
-          </div>
-        )}
-
-        {step === 1 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div>
-              <div
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 12,
-                  color: 'rgba(245,244,239,0.5)',
-                  marginBottom: 10,
-                }}
-              >
-                Action type
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                {(
-                  [
-                    ['NotifyOnly', 'Notify only'],
-                    ['AddCollateral', 'Add collateral'],
-                    ['RepayDebt', 'Repay debt'],
-                    ['Deleverage', 'Deleverage'],
-                  ] as [ActionKind, string][]
-                ).map(([val, lbl]) => {
-                  const needsPro = val !== 'NotifyOnly' && !isPremium;
-                  return (
-                    <button
-                      key={val}
-                      onClick={() => set('action_kind', val)}
-                      style={{
-                        padding: '14px 16px',
-                        borderRadius: 14,
-                        border: `1px solid ${form.action_kind === val ? '#D97757' : 'rgba(255,255,255,0.1)'}`,
-                        background:
-                          form.action_kind === val
-                            ? 'rgba(217,119,87,0.15)'
-                            : 'rgba(255,255,255,0.03)',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        position: 'relative',
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontFamily: "'Inter', sans-serif",
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: needsPro ? 'rgba(245,244,239,0.4)' : '#F5F4EF',
-                        }}
-                      >
-                        {lbl}
-                      </div>
-                      {needsPro && (
-                        <span
-                          style={{
-                            fontFamily: "'Inter', sans-serif",
-                            fontSize: 10,
-                            color: '#D97757',
-                          }}
-                        >
-                          🔒 Pro
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            {form.action_kind !== 'NotifyOnly' && (
-              <>
-                <WizardSelect
-                  label="Token"
-                  value={form.action_token}
-                  onChange={(v) => set('action_token', v)}
-                  options={[
-                    ['USDC', 'USDC'],
-                    ['SOL', 'SOL'],
-                    ['mSOL', 'mSOL'],
-                    ['USDT', 'USDT'],
-                  ]}
-                />
-                <WizardSlider
-                  label="Amount (USD)"
-                  value={form.action_amount_usd}
-                  min={50}
-                  max={5000}
-                  step={50}
-                  format={(v) => fmtUsd(v)}
-                  onChange={(v) => set('action_amount_usd', v)}
-                />
-              </>
-            )}
-          </div>
-        )}
-
-        {step === 2 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <WizardSlider
-              label="Max per action (USD)"
-              value={form.max_usd_per_action}
-              min={50}
-              max={5000}
-              step={50}
-              format={(v) => fmtUsd(v)}
-              onChange={(v) => set('max_usd_per_action', v)}
-            />
-            <WizardSlider
-              label="Daily limit (USD)"
-              value={form.daily_limit_usd}
-              min={100}
-              max={20000}
-              step={100}
-              format={(v) => fmtUsd(v)}
-              onChange={(v) => set('daily_limit_usd', v)}
-            />
-            <WizardSlider
-              label="Cooldown"
-              value={form.cooldown_seconds}
-              min={300}
-              max={86400}
-              step={300}
-              format={(v) => (v >= 3600 ? `${v / 3600}h` : `${v / 60}m`)}
-              onChange={(v) => set('cooldown_seconds', v)}
-            />
-          </div>
-        )}
-
-        {step === 3 && (
-          <div
-            style={{
-              background: 'rgba(0,0,0,0.2)',
-              borderRadius: 16,
-              padding: '18px 20px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 12,
-            }}
-          >
-            {(
-              [
-                ['Trigger', triggerSummary],
-                ['Protocol', form.protocol ?? 'All'],
-                ['Action', form.action_kind],
-                ...(form.action_kind !== 'NotifyOnly'
-                  ? ([
-                      ['Token', form.action_token],
-                      ['Amount', fmtUsd(form.action_amount_usd)],
-                    ] as [string, string][])
-                  : []),
-                ['Max/action', fmtUsd(form.max_usd_per_action)],
-                ['Daily limit', fmtUsd(form.daily_limit_usd)],
-                [
-                  'Cooldown',
-                  form.cooldown_seconds >= 3600
-                    ? `${form.cooldown_seconds / 3600}h`
-                    : `${form.cooldown_seconds / 60}m`,
-                ],
-              ] as [string, string][]
-            ).map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span
-                  style={{
-                    fontFamily: "'Inter', sans-serif",
-                    fontSize: 13,
-                    color: 'rgba(245,244,239,0.4)',
-                  }}
-                >
-                  {k}
-                </span>
-                <span
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 13,
-                    color: '#F5F4EF',
-                  }}
-                >
-                  {v}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 28 }}>
-          <button
-            onClick={step === 0 ? onClose : () => setStep((s) => s - 1)}
-            style={{
-              background: 'rgba(255,255,255,0.06)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: 100,
-              padding: '10px 22px',
-              cursor: 'pointer',
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 13,
-              color: 'rgba(245,244,239,0.6)',
-            }}
-          >
-            {step === 0 ? 'Cancel' : 'Back'}
-          </button>
-          <button
-            onClick={step === 3 ? () => onSave(form) : () => setStep((s) => s + 1)}
-            disabled={locked && step === 1}
-            style={{
-              background: locked && step === 1 ? 'rgba(217,119,87,0.3)' : '#D97757',
-              border: 'none',
-              borderRadius: 100,
-              padding: '10px 28px',
-              cursor: locked && step === 1 ? 'not-allowed' : 'pointer',
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 13,
-              fontWeight: 600,
-              color: '#1F1E1D',
-            }}
-          >
-            {step === 3 ? 'Activate Rule' : 'Continue'}
-          </button>
-        </div>
-      </div>
+function Block({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div>
+      <Eyebrow>{label}</Eyebrow>
+      <div style={{ fontFamily: tokens.sans, fontSize: 16, color: accent ? '#c66f53' : tokens.ink, marginTop: 6 }}>{value}</div>
     </div>
   );
 }
 
-function WizardSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: [string, string][];
-}) {
+function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div
-        style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 12,
-          color: 'rgba(245,244,239,0.5)',
-          marginBottom: 8,
-        }}
-      >
-        {label}
-      </div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          width: '100%',
-          background: 'rgba(0,0,0,0.3)',
-          border: '1px solid rgba(255,255,255,0.12)',
-          borderRadius: 12,
-          padding: '11px 14px',
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 14,
-          color: '#F5F4EF',
-          appearance: 'none',
-          cursor: 'pointer',
-        }}
-      >
-        {options.map(([v, l]) => (
-          <option key={v} value={v} style={{ background: '#2A2826' }}>
-            {l}
-          </option>
-        ))}
-      </select>
+      <Eyebrow>{label}</Eyebrow>
+      <div style={{ fontFamily: tokens.mono, fontSize: 14, color: 'color-mix(in oklab, var(--ink) 62%, transparent)', marginTop: 5 }}>{value}</div>
     </div>
   );
 }
 
-function WizardSlider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  format,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  format: (v: number) => string;
-  onChange: (v: number) => void;
-}) {
+function NewRuleModal({ wallet, onClose, onSave }: { wallet: string; onClose: () => void; onSave: (rule: GuardRule) => void }) {
+  const [health, setHealth] = useState(60);
+  const [amount, setAmount] = useState(300);
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 12,
-            color: 'rgba(245,244,239,0.5)',
-          }}
-        >
-          {label}
-        </span>
-        <span
-          style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 13,
-            color: '#D97757',
-          }}
-        >
-          {format(value)}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ width: '100%', accentColor: '#D97757', cursor: 'pointer' }}
-      />
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(15,15,15,0.38)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <Card pad={24} style={{ width: 'min(520px, 100%)', background: 'var(--surface-1)' }} onClick={(e) => e.stopPropagation()}>
+        <h2 style={{ fontFamily: tokens.sans, fontSize: 22, margin: 0 }}>New guardrail</h2>
+        <p style={{ color: 'color-mix(in oklab, var(--ink) 57%, transparent)', fontFamily: tokens.sans, marginTop: 6 }}>Create a notify-only rule. Autonomous actions can be enabled later.</p>
+        <label style={{ display: 'grid', gap: 8, marginTop: 20, fontFamily: tokens.sans }}>
+          <span>Health threshold</span>
+          <input type="range" min={10} max={90} value={health} onChange={(e) => setHealth(Number(e.target.value))} />
+          <strong style={{ fontFamily: tokens.mono }}>{health}</strong>
+        </label>
+        <label style={{ display: 'grid', gap: 8, marginTop: 16, fontFamily: tokens.sans }}>
+          <span>Daily alert cap</span>
+          <input type="range" min={1} max={50} value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
+          <strong style={{ fontFamily: tokens.mono }}>{amount} alerts</strong>
+        </label>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="accent"
+            onClick={() => onSave({
+              id: `gr${Date.now()}`,
+              wallet,
+              protocol: null,
+              trigger_kind: 'HealthBelow',
+              trigger_value: health,
+              action_kind: 'NotifyOnly',
+              action_token: null,
+              action_amount_usd: null,
+              max_usd_per_action: 0,
+              daily_limit_usd: amount,
+              cooldown_seconds: 1800,
+              is_active: true,
+              last_fired_at: null,
+            })}
+          >
+            Save rule
+          </Button>
+        </div>
+      </Card>
     </div>
   );
 }

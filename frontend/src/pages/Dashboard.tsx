@@ -1,567 +1,699 @@
 import { useWallet } from '@solana/wallet-adapter-react';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { DEMO_MODE } from '../api';
-import { HealthGauge } from '../components/HealthGauge';
-import {
-  Card,
-  EmptyState,
-  LtvBar,
-  PriceTickerRail,
-  ProtocolBadge,
-  PulseDot,
-  SectionLabel,
-  SeverityBadge,
-  SidePill,
-  Skeleton,
-} from '../components/ui';
-import { useAlerts, useHealth, useTicker } from '../hooks';
+import { ArcGauge, Button, Card, Chip, Eyebrow, ProtocolBadge, Reveal, Skeleton, Stat, tokens } from '../components/sonar';
+import { RepayModal } from '../components/RepayModal';
+import { useAlerts, useHealth, useTicker, useLinkWallet } from '../hooks';
 import { MOCK_ALERTS, MOCK_HEALTH } from '../mockData';
-import type { Alert, Position, ProtocolLtv } from '../types';
-import { alertWireToAlert, fmtUsd, timeAgo, truncAddr, walletRiskToHealth } from '../utils';
+import type { Alert, Position, ProtocolLtv, Severity } from '../types';
+import { alertWireToAlert, fmtUsd, timeAgo, walletRiskToHealth } from '../utils';
 
 export function Dashboard() {
   const { publicKey } = useWallet();
   const wallet = publicKey?.toBase58() ?? null;
   const useLive = !DEMO_MODE && !!wallet;
-
   const healthQ = useHealth(useLive ? wallet : null);
   const alertsQ = useAlerts(useLive ? wallet : null);
   const tickerQ = useTicker();
+  const linkWalletMut = useLinkWallet();
+  const [repayPosition, setRepayPosition] = useState<Position | null>(null);
 
   const data = useMemo(
     () => (useLive && healthQ.data ? walletRiskToHealth(healthQ.data) : MOCK_HEALTH),
-    [useLive, healthQ.data],
+    [healthQ.data, useLive],
   );
   const alerts = useMemo(
     () => (useLive && alertsQ.data ? alertsQ.data.map(alertWireToAlert) : MOCK_ALERTS),
-    [useLive, alertsQ.data],
+    [alertsQ.data, useLive],
   );
 
-  const loading = useLive ? healthQ.isLoading : false;
-  const [elapsed, setElapsed] = useState(0);
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
-
-  useEffect(() => {
-    setElapsed(0);
-  }, [data.computed_at]);
-
-  useEffect(() => {
-    if (loading) return;
-    const iv = setInterval(() => setElapsed((e) => e + 10), 10000);
-    return () => clearInterval(iv);
-  }, [loading]);
-
-  const totalCollateral = data.positions
-    .filter((p) => p.side === 'Collateral')
-    .reduce((s, p) => s + p.value_usd, 0);
-  const totalBorrow = data.positions
-    .filter((p) => p.side === 'Borrow')
-    .reduce((s, p) => s + p.value_usd, 0);
+  const totalCollateral = data.positions.filter((p) => p.side === 'Collateral').reduce((s, p) => s + p.value_usd, 0);
+  const totalBorrow = data.positions.filter((p) => p.side === 'Borrow').reduce((s, p) => s + p.value_usd, 0);
+  const net = totalCollateral - totalBorrow;
+  const watchCount = data.protocol_ltvs.filter((p) => p.ltv > p.liquidation_threshold * 0.75).length;
+  const criticalCount = data.protocol_ltvs.filter((p) => p.ltv > p.liquidation_threshold * 0.9).length;
+  const avgThreshold = data.protocol_ltvs.reduce((s, p) => s + p.liquidation_threshold * p.total_collateral_usd, 0) / Math.max(totalCollateral, 1);
+  const firstBorrow = data.positions.find((p) => p.side === 'Borrow' && p.reserve_or_bank);
 
   return (
-    <div style={{ padding: '88px 28px 60px', maxWidth: 1140, margin: '0 auto' }}>
-      <Card style={{ marginBottom: 20, padding: '40px 40px 36px' }}>
-        {loading ? (
-          <div style={{ display: 'flex', gap: 40, alignItems: 'center' }}>
-            <Skeleton width={220} height={220} radius="50%" />
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <Skeleton width="40%" height={20} />
-              <Skeleton width="60%" height={48} />
-              <Skeleton width="35%" height={16} />
-            </div>
+    <main style={{ padding: '64px 28px 72px', maxWidth: 1180, margin: '0 auto' }}>
+      <Reveal>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 28, alignItems: 'end', marginBottom: 26 }}>
+          <div>
+            <h1 style={{ fontFamily: tokens.sans, fontSize: 34, fontWeight: 700, letterSpacing: '-0.025em', margin: 0 }}>
+              Overview
+            </h1>
+            <p style={{ fontFamily: tokens.sans, fontSize: 16, color: 'color-mix(in oklab, var(--ink) 57%, transparent)', lineHeight: 1.5, maxWidth: 620, marginTop: 8 }}>
+              {data.positions.length} position legs across {data.protocol_ltvs.length} protocols. Updated from indexed Solana lending accounts.
+            </p>
           </div>
-        ) : (
-          <div style={{ display: 'flex', gap: 40, alignItems: 'center', flexWrap: 'wrap' }}>
-            <HealthGauge score={data.health_score} size={200} />
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <PulseDot />
-                <span
-                  style={{
-                    fontFamily: "'Inter', sans-serif",
-                    fontSize: 12,
-                    color: 'rgba(245,244,239,0.4)',
-                    letterSpacing: '0.04em',
-                  }}
-                >
-                  updated {elapsed}s ago
-                </span>
-              </div>
-              <div
-                style={{
-                  fontFamily: "'Fraunces', serif",
-                  fontSize: 52,
-                  fontWeight: 600,
-                  color: '#F5F4EF',
-                  letterSpacing: '-0.03em',
-                  lineHeight: 1,
-                }}
-              >
-                {fmtUsd(data.liquidation_buffer_usd)}
-              </div>
-              <div
-                style={{
-                  fontFamily: "'Inter', sans-serif",
-                  fontSize: 14,
-                  color: 'rgba(245,244,239,0.45)',
-                  marginTop: 6,
-                  marginBottom: 24,
-                }}
-              >
-                Liquidation buffer
-              </div>
-              <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-                {[
-                  { label: 'Total Collateral', value: fmtUsd(totalCollateral) },
-                  { label: 'Total Borrow', value: fmtUsd(totalBorrow) },
-                  { label: 'Net Value', value: fmtUsd(totalCollateral - totalBorrow) },
-                ].map(({ label, value }) => (
-                  <div key={label}>
-                    <div
-                      style={{
-                        fontFamily: "'Inter', sans-serif",
-                        fontSize: 11,
-                        color: 'rgba(245,244,239,0.35)',
-                        letterSpacing: '0.06em',
-                        textTransform: 'uppercase',
-                        marginBottom: 4,
-                      }}
-                    >
-                      {label}
-                    </div>
-                    <div
-                      style={{
-                        fontFamily: "'JetBrains Mono', monospace",
-                        fontSize: 18,
-                        fontWeight: 600,
-                        color: '#F5F4EF',
-                      }}
-                    >
-                      {value}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-      </Card>
+          <Chip tone={criticalCount > 0 ? 'critical' : watchCount > 0 ? 'watch' : 'healthy'}>
+            {criticalCount > 0 ? `${criticalCount} critical` : watchCount > 0 ? `${watchCount} watch` : 'Healthy'}
+          </Chip>
+        </div>
+      </Reveal>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: 12,
-          marginBottom: 20,
-        }}
-      >
-        {loading
-          ? [1, 2, 3].map((i) => (
-              <Card key={i} style={{ padding: 20 }}>
-                <Skeleton width="50%" height={16} style={{ marginBottom: 12 }} />
-                <Skeleton width="80%" height={28} style={{ marginBottom: 8 }} />
-                <Skeleton width="100%" height={4} radius={4} />
-              </Card>
-            ))
-          : data.protocol_ltvs.map((p) => <ProtocolCard key={p.protocol} data={p} />)}
-      </div>
-
-      <Card style={{ marginBottom: 20, padding: 0, overflow: 'hidden' }}>
-        <div
+      <Reveal delay={0.05}>
+        <section
           style={{
-            padding: '20px 24px 16px',
-            borderBottom: '1px solid rgba(255,255,255,0.06)',
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr 1fr 1fr',
+            border: `1px solid ${tokens.lineSoft}`,
+            borderRadius: 14,
+            overflow: 'hidden',
+            background: 'linear-gradient(180deg, var(--surface-2) 0%, var(--surface-1) 100%)',
+            boxShadow: 'var(--shadow-md)',
+            marginBottom: 22,
           }}
         >
-          <SectionLabel>Positions</SectionLabel>
+          <Stat label="Net position" value={fmtUsd(net)} delta="+2.4% 7d" tone="pos" />
+          <Stat label="Total supplied" value={fmtUsd(totalCollateral)} />
+          <Stat label="Total borrowed" value={fmtUsd(totalBorrow)} />
+          <Stat label="Weighted health" value={(data.health_score / 50).toFixed(2)} delta={watchCount ? 'Watch' : 'Healthy'} tone={watchCount ? 'warn' : 'pos'} />
+        </section>
+      </Reveal>
+
+      <Reveal delay={0.1}>
+        <ProtocolOverview protocols={data.protocol_ltvs} positions={data.positions} />
+      </Reveal>
+
+      {watchCount || criticalCount ? (
+        <Card pad={18} raised style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28, borderColor: criticalCount ? 'rgba(196,69,54,0.38)' : 'rgba(198,148,35,0.42)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontFamily: tokens.sans }}>
+            <span style={{ color: criticalCount ? tokens.rust : '#8a6a1f', fontFamily: tokens.mono }}>●</span>
+            <span>{criticalCount + watchCount} positions need attention.</span>
+          </div>
+          <Link to="/positions" style={{ textDecoration: 'none' }}>
+            <Button>Review →</Button>
+          </Link>
+        </Card>
+      ) : null}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(320px, 0.65fr)', gap: 22 }}>
+        <div style={{ display: 'grid', gap: 20 }}>
+          <Card pad={0} style={{ overflow: 'hidden' }}>
+            <div style={{ padding: '18px 20px', borderBottom: `1px solid ${tokens.lineSoft}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Eyebrow>Positions</Eyebrow>
+              <RefreshButton
+                refetching={healthQ.isFetching || linkWalletMut.isPending}
+                onClick={() => {
+                  if (useLive && wallet) {
+                    linkWalletMut.mutate(wallet, {
+                      onSuccess: () => {
+                        healthQ.refetch();
+                        alertsQ.refetch();
+                      }
+                    });
+                  } else {
+                    healthQ.refetch();
+                    alertsQ.refetch();
+                  }
+                }}
+              />
+            </div>
+            {healthQ.isLoading && useLive ? (
+              <div style={{ padding: 20, display: 'grid', gap: 10 }}>
+                {[1, 2, 3].map((i) => <Skeleton key={i} height={58} />)}
+              </div>
+            ) : (
+              <PositionGroups
+                positions={data.positions}
+                ticker={tickerQ.data}
+                useLive={useLive}
+                onRepay={setRepayPosition}
+              />
+            )}
+          </Card>
         </div>
-        {loading ? (
-          <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <Skeleton key={i} height={48} />
-            ))}
-          </div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                {['Protocol', 'Asset', 'Side', 'Amount', 'USD Value', 'Updated', ''].map((h) => (
-                  <th
-                    key={h}
-                    style={{
-                      padding: '10px 16px',
-                      textAlign: 'left',
-                      fontFamily: "'Inter', sans-serif",
-                      fontSize: 11,
-                      fontWeight: 600,
-                      color: 'rgba(245,244,239,0.3)',
-                      letterSpacing: '0.07em',
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.positions.map((pos) => (
-                <Fragment key={pos.id}>
-                  <tr
-                    onClick={() => setExpandedRow(expandedRow === pos.id ? null : pos.id)}
-                    style={{
-                      borderBottom:
-                        expandedRow === pos.id ? 'none' : '1px solid rgba(255,255,255,0.04)',
-                      cursor: 'pointer',
-                      transition: 'background 0.15s',
-                      background: expandedRow === pos.id ? 'rgba(255,255,255,0.03)' : 'none',
-                    }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.background =
-                        expandedRow === pos.id ? 'rgba(255,255,255,0.03)' : 'none')
-                    }
-                  >
-                    <td style={{ padding: '14px 16px' }}>
-                      <ProtocolBadge protocol={pos.protocol} />
-                    </td>
-                    <td style={{ padding: '14px 16px' }}>
-                      <div
-                        style={{
-                          fontFamily: "'Inter', sans-serif",
-                          fontSize: 14,
-                          fontWeight: 600,
-                          color: '#F5F4EF',
-                        }}
-                      >
-                        {pos.asset_symbol}
-                      </div>
-                      {pos.asset_mint && tickerQ.data?.[pos.asset_mint] && (
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginTop: 2 }}>
-                          <span
-                            style={{
-                              fontFamily: "'JetBrains Mono', monospace",
-                              fontSize: 11,
-                              color: 'rgba(245,244,239,0.35)',
-                            }}
-                          >
-                            ${tickerQ.data[pos.asset_mint].price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                          </span>
-                          {tickerQ.data[pos.asset_mint].change_24h !== null && (
-                            <span
-                              style={{
-                                fontFamily: "'Inter', sans-serif",
-                                fontSize: 10,
-                                color: (tickerQ.data[pos.asset_mint].change_24h ?? 0) >= 0 ? '#7DA87B' : '#D9604E',
-                              }}
-                            >
-                              {(tickerQ.data[pos.asset_mint].change_24h ?? 0) >= 0 ? '▲' : '▼'}{Math.abs(tickerQ.data[pos.asset_mint].change_24h ?? 0).toFixed(2)}%
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ padding: '14px 16px' }}>
-                      <SidePill side={pos.side} />
-                    </td>
-                    <td
-                      style={{
-                        padding: '14px 16px',
-                        fontFamily: "'JetBrains Mono', monospace",
-                        fontSize: 13,
-                        color: 'rgba(245,244,239,0.7)',
-                      }}
-                    >
-                      {pos.amount.toLocaleString('en-US', { maximumFractionDigits: 4 })}
-                    </td>
-                    <td
-                      style={{
-                        padding: '14px 16px',
-                        fontFamily: "'JetBrains Mono', monospace",
-                        fontSize: 13,
-                        color: '#F5F4EF',
-                        fontWeight: 600,
-                      }}
-                    >
-                      {fmtUsd(pos.value_usd)}
-                    </td>
-                    <td
-                      style={{
-                        padding: '14px 16px',
-                        fontFamily: "'Inter', sans-serif",
-                        fontSize: 12,
-                        color: 'rgba(245,244,239,0.35)',
-                      }}
-                    >
-                      {timeAgo(pos.updated_at)}
-                    </td>
-                    <td
-                      style={{
-                        padding: '14px 16px',
-                        color: 'rgba(245,244,239,0.25)',
-                        fontSize: 12,
-                      }}
-                    >
-                      {expandedRow === pos.id ? '▲' : '▼'}
-                    </td>
-                  </tr>
-                  {expandedRow === pos.id && (
-                    <tr
-                      style={{
-                        borderBottom: '1px solid rgba(255,255,255,0.04)',
-                        background: 'rgba(255,255,255,0.02)',
-                      }}
-                    >
-                      <td colSpan={7} style={{ padding: '8px 16px 16px 16px' }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            gap: 28,
-                            alignItems: 'center',
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <div>
-                            <div
-                              style={{
-                                fontFamily: "'Inter', sans-serif",
-                                fontSize: 11,
-                                color: 'rgba(245,244,239,0.35)',
-                                letterSpacing: '0.07em',
-                                textTransform: 'uppercase',
-                                marginBottom: 4,
-                              }}
-                            >
-                              Obligation Address
-                            </div>
-                            <span
-                              style={{
-                                fontFamily: "'JetBrains Mono', monospace",
-                                fontSize: 12,
-                                color: 'rgba(245,244,239,0.6)',
-                              }}
-                            >
-                              {truncAddr(pos.obligation_address)}
-                            </span>
-                            <button
-                              onClick={() =>
-                                void navigator.clipboard?.writeText(pos.obligation_address)
-                              }
-                              style={{
-                                background: 'none',
-                                border: 'none',
-                                cursor: 'pointer',
-                                color: 'rgba(245,244,239,0.3)',
-                                fontSize: 12,
-                                marginLeft: 6,
-                              }}
-                            >
-                              ⎘
-                            </button>
-                          </div>
-                          <a
-                            href={`https://explorer.solana.com/address/${pos.obligation_address}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{
-                              fontFamily: "'Inter', sans-serif",
-                              fontSize: 12,
-                              color: '#D97757',
-                              textDecoration: 'none',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 4,
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            View on Explorer ↗
-                          </a>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
 
-      {!loading && <PriceTickerRail />}
+        <aside style={{ display: 'grid', gap: 20 }}>
+          <Card pad={24} style={{ textAlign: 'center', background: 'var(--surface-1)' }}>
+            <Eyebrow>Health · 30d</Eyebrow>
+            <HealthLine value={(data.health_score / 50).toFixed(2)} />
+          </Card>
+          <RiskSummary alerts={alerts} />
+        </aside>
+      </div>
 
-      <div style={{ marginTop: 20 }}>
-        <SectionLabel>Recent Alerts</SectionLabel>
-        {loading ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {[1, 2, 3].map((i) => (
-              <Skeleton key={i} height={72} />
+      {repayPosition && (
+        <RepayModal
+          position={repayPosition}
+          totalDebtUsd={totalBorrow}
+          totalCollateralUsd={totalCollateral}
+          liquidationThreshold={avgThreshold || 0.85}
+          onClose={() => setRepayPosition(null)}
+        />
+      )}
+
+      {!useLive && firstBorrow ? null : null}
+    </main>
+  );
+}
+
+type TickerMap = Record<string, { price: number; change_24h: number | null }> | undefined;
+
+const PROTOCOL_ACCENT: Record<string, string> = {
+  Kamino: '#FF7A3D',
+  Marginfi: '#8B5CD7',
+  Save: '#5A6B47',
+};
+
+function PositionGroups({
+  positions,
+  ticker,
+  useLive,
+  onRepay,
+}: {
+  positions: Position[];
+  ticker: TickerMap;
+  useLive: boolean;
+  onRepay: (p: Position) => void;
+}) {
+  const collateral = positions.filter((p) => p.side === 'Collateral').slice(0, 4);
+  const borrow = positions.filter((p) => p.side === 'Borrow').slice(0, 4);
+
+  return (
+    <div>
+      <PositionGroup
+        title="Collateral"
+        accent="var(--moss)"
+        rows={collateral}
+        ticker={ticker}
+        useLive={useLive}
+        onRepay={onRepay}
+        empty="No collateral legs."
+      />
+      <PositionGroup
+        title="Borrow"
+        accent="var(--rust)"
+        rows={borrow}
+        ticker={ticker}
+        useLive={useLive}
+        onRepay={onRepay}
+        empty="No borrow legs — you're not at risk."
+        topDivider
+      />
+    </div>
+  );
+}
+
+function PositionGroup({
+  title,
+  accent,
+  rows,
+  ticker,
+  useLive,
+  onRepay,
+  empty,
+  topDivider,
+}: {
+  title: string;
+  accent: string;
+  rows: Position[];
+  ticker: TickerMap;
+  useLive: boolean;
+  onRepay: (p: Position) => void;
+  empty: string;
+  topDivider?: boolean;
+}) {
+  return (
+    <section
+      style={{
+        padding: '14px 18px 18px',
+        borderTop: topDivider ? `1px solid ${tokens.lineSoft}` : 'none',
+      }}
+    >
+      {/* Section header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          fontFamily: tokens.mono,
+          fontSize: 11,
+          letterSpacing: '0.18em',
+          textTransform: 'uppercase',
+          color: 'color-mix(in oklab, var(--ink) 65%, transparent)',
+          marginBottom: 10,
+        }}
+      >
+        <span
+          aria-hidden
+          style={{ width: 6, height: 6, borderRadius: '50%', background: accent }}
+        />
+        {title}
+        <span
+          style={{
+            color: 'color-mix(in oklab, var(--ink) 38%, transparent)',
+            marginLeft: 'auto',
+            fontFamily: tokens.mono,
+            fontSize: 11,
+          }}
+        >
+          {rows.length}
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <div
+          style={{
+            fontFamily: tokens.sans,
+            fontSize: 13,
+            color: 'color-mix(in oklab, var(--ink) 45%, transparent)',
+            padding: '14px 4px',
+          }}
+        >
+          {empty}
+        </div>
+      ) : (
+        <>
+          {/* Column headers — Protocol | Asset | Amount | USD Value | (action) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '38px 1.4fr 1fr 1fr auto',
+              alignItems: 'center',
+              gap: 12,
+              padding: '0 12px 8px',
+              fontFamily: tokens.mono,
+              fontSize: 10,
+              letterSpacing: '0.16em',
+              textTransform: 'uppercase',
+              color: 'color-mix(in oklab, var(--ink) 45%, transparent)',
+            }}
+          >
+            <span />
+            <span>Asset</span>
+            <span style={{ textAlign: 'right' }}>Amount</span>
+            <span style={{ textAlign: 'right' }}>Value</span>
+            <span />
+          </div>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {rows.map((pos) => (
+              <PositionRow
+                key={pos.id}
+                pos={pos}
+                ticker={ticker}
+                useLive={useLive}
+                onRepay={onRepay}
+              />
             ))}
           </div>
-        ) : alerts.length === 0 ? (
-          <EmptyState />
+        </>
+      )}
+    </section>
+  );
+}
+
+function PositionRow({
+  pos,
+  ticker,
+  useLive,
+  onRepay,
+}: {
+  pos: Position;
+  ticker: TickerMap;
+  useLive: boolean;
+  onRepay: (p: Position) => void;
+}) {
+  const accent = PROTOCOL_ACCENT[pos.protocol] ?? tokens.ink2;
+  const tick = pos.asset_mint ? ticker?.[pos.asset_mint] : undefined;
+  const priceLabel = tick?.price
+    ? `$${tick.price.toLocaleString('en-US', { maximumFractionDigits: tick.price < 1 ? 6 : 4 })}`
+    : '—';
+  const explorerUrl = pos.obligation_address
+    ? `https://solscan.io/account/${pos.obligation_address}`
+    : null;
+
+  // Trim trailing zeros for token amounts so 25.500000 reads as 25.5.
+  const amountLabel = Number(pos.amount.toFixed(6))
+    .toString()
+    .replace(/(\.\d*?[1-9])0+$/, '$1')
+    .replace(/\.0+$/, '');
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '38px 1.4fr 1fr 1fr auto',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 12px',
+        borderRadius: 10,
+        borderLeft: `3px solid ${accent}`,
+        background: 'color-mix(in oklab, var(--ink) 3%, transparent)',
+        transition: 'background 0.15s',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'color-mix(in oklab, var(--ink) 6%, transparent)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'color-mix(in oklab, var(--ink) 3%, transparent)'; }}
+    >
+      {/* Protocol — logo only, native browser tooltip on hover */}
+      <span title={pos.protocol} aria-label={pos.protocol} style={{ display: 'inline-flex' }}>
+        <ProtocolBadge protocol={pos.protocol} size={28} />
+      </span>
+
+      {/* Asset + live price */}
+      <div style={{ minWidth: 0 }}>
+        {explorerUrl ? (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noreferrer"
+            title={`Open obligation on Solscan — ${pos.obligation_address}`}
+            style={{
+              fontFamily: tokens.sans,
+              fontWeight: 600,
+              fontSize: 14,
+              color: tokens.ink,
+              textDecoration: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--cobalt)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = tokens.ink; }}
+          >
+            {pos.asset_symbol}
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+              style={{ opacity: 0.55 }}
+            >
+              <path d="M7 17 17 7M9 7h8v8" />
+            </svg>
+          </a>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {alerts.slice(0, 5).map((alert) => (
-              <AlertRow key={alert.id} alert={alert} />
-            ))}
+          <div style={{ fontFamily: tokens.sans, fontWeight: 600, fontSize: 14, color: tokens.ink }}>
+            {pos.asset_symbol}
           </div>
         )}
+        <div
+          style={{
+            fontFamily: tokens.mono,
+            fontSize: 11,
+            color: 'color-mix(in oklab, var(--ink) 50%, transparent)',
+            marginTop: 2,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {priceLabel}
+          {tick?.change_24h != null ? (
+            <span
+              style={{
+                marginLeft: 6,
+                color: tick.change_24h >= 0 ? 'var(--moss)' : 'var(--rust)',
+              }}
+            >
+              {tick.change_24h >= 0 ? '+' : ''}
+              {(tick.change_24h * 100).toFixed(2)}%
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Amount (token-native) */}
+      <div
+        style={{
+          fontFamily: tokens.mono,
+          fontSize: 13,
+          fontVariantNumeric: 'tabular-nums',
+          color: 'color-mix(in oklab, var(--ink) 80%, transparent)',
+          textAlign: 'right',
+        }}
+      >
+        {amountLabel}
+      </div>
+
+      {/* USD value */}
+      <div
+        style={{
+          fontFamily: tokens.mono,
+          fontWeight: 700,
+          fontSize: 14,
+          fontVariantNumeric: 'tabular-nums',
+          color: tokens.ink,
+          textAlign: 'right',
+        }}
+      >
+        {fmtUsd(pos.value_usd)}
+      </div>
+
+      {/* Action — only for repayable borrows */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        {pos.side === 'Borrow' && pos.reserve_or_bank && pos.amount > 0 && useLive ? (
+          <RepayPill onClick={() => onRepay(pos)} />
+        ) : null}
       </div>
     </div>
   );
 }
 
-function ProtocolCard({ data }: { data: ProtocolLtv }) {
-  const ltvPct = (data.ltv * 100).toFixed(1);
-  const color =
-    data.ltv > data.liquidation_threshold * 0.9
-      ? '#D9604E'
-      : data.ltv > data.liquidation_threshold * 0.75
-        ? '#E4A853'
-        : '#7DA87B';
+function RepayPill({ onClick }: { onClick: () => void }) {
   return (
-    <Card style={{ padding: 20 }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          marginBottom: 14,
-        }}
+    <motion.button
+      type="button"
+      onClick={onClick}
+      whileHover={{ y: -1 }}
+      whileTap={{ y: 0, scale: 0.97 }}
+      transition={{ duration: 0.12 }}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontFamily: tokens.sans,
+        fontSize: 12.5,
+        fontWeight: 600,
+        padding: '6px 14px',
+        borderRadius: 999,
+        border: `1px solid color-mix(in oklab, var(--rust) 55%, transparent)`,
+        background: 'color-mix(in oklab, var(--rust) 14%, transparent)',
+        color: 'var(--rust)',
+        cursor: 'pointer',
+        letterSpacing: '0.01em',
+        transition: 'background 0.18s, border-color 0.18s, box-shadow 0.18s',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'color-mix(in oklab, var(--rust) 22%, transparent)';
+        e.currentTarget.style.boxShadow = '0 0 0 4px color-mix(in oklab, var(--rust) 8%, transparent)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'color-mix(in oklab, var(--rust) 14%, transparent)';
+        e.currentTarget.style.boxShadow = 'none';
+      }}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M3 12a9 9 0 1 0 3.95-7.46" />
+        <polyline points="3 4 3 10 9 10" />
+      </svg>
+      Repay
+    </motion.button>
+  );
+}
+
+function RefreshButton({ refetching, onClick }: { refetching: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={refetching}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontFamily: tokens.sans,
+        fontSize: 12.5,
+        fontWeight: 500,
+        padding: '6px 11px',
+        borderRadius: 999,
+        border: `1px solid ${tokens.line}`,
+        background: 'var(--surface-2)',
+        color: tokens.ink,
+        cursor: refetching ? 'progress' : 'pointer',
+        transition: 'background 0.15s, transform 0.12s',
+      }}
+      onMouseEnter={(e) => { if (!refetching) e.currentTarget.style.background = 'var(--surface-3)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
+    >
+      <motion.span
+        aria-hidden
+        animate={refetching ? { rotate: 360 } : { rotate: 0 }}
+        transition={refetching ? { duration: 0.9, repeat: Infinity, ease: 'linear' } : { duration: 0.2 }}
+        style={{ display: 'inline-flex' }}
       >
-        <ProtocolBadge protocol={data.protocol} />
-        <span
-          style={{
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 20,
-            fontWeight: 700,
-            color,
-            letterSpacing: '-0.02em',
-          }}
-        >
-          {ltvPct}%
-        </span>
-      </div>
-      <div style={{ marginBottom: 10 }}>
-        <LtvBar ltv={data.ltv} threshold={data.liquidation_threshold} />
-      </div>
-      <div
-        style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 10,
-          color: 'rgba(245,244,239,0.3)',
-          marginBottom: 12,
-          textAlign: 'right',
-        }}
-      >
-        liq. threshold {(data.liquidation_threshold * 100).toFixed(0)}%
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <div>
-          <div
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 10,
-              color: 'rgba(245,244,239,0.3)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.06em',
-              marginBottom: 3,
-            }}
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 12a9 9 0 0 1-15.36 6.36M3 12a9 9 0 0 1 15.36-6.36" />
+          <polyline points="21 4 21 9 16 9" />
+          <polyline points="3 20 3 15 8 15" />
+        </svg>
+      </motion.span>
+      {refetching ? 'Refreshing…' : 'Refresh'}
+    </button>
+  );
+}
+
+function ProtocolOverview({ protocols, positions }: { protocols: ProtocolLtv[]; positions: Position[] }) {
+  const accentMap: Record<string, string> = { Kamino: '#FF7A3D', Save: '#5A6B47', Marginfi: '#8B5CD7' };
+  return (
+    <section style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14, marginBottom: 22 }}>
+      {protocols.map((p) => {
+        const accent = accentMap[p.protocol] ?? tokens.cobalt;
+        const legs = positions.filter((pos) => pos.protocol === p.protocol).length;
+        return (
+          <motion.div
+            key={p.protocol}
+            whileHover={{ y: -3 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 26 }}
           >
-            Collateral
+            <Link to={`/protocol/${encodeURIComponent(p.protocol)}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+              <Card
+                pad={20}
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  cursor: 'pointer',
+                  minHeight: 168,
+                  background: `linear-gradient(180deg, var(--surface-2) 0%, var(--surface-1) 100%)`,
+                  borderTop: `2px solid ${accent}`,
+                  boxShadow: 'var(--shadow-md)',
+                }}
+              >
+                <div style={{ position: 'absolute', inset: 0, background: `radial-gradient(180px 120px at 100% 0%, ${accent}22, transparent 70%)`, pointerEvents: 'none' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', position: 'relative' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <ProtocolBadge protocol={p.protocol} size={36} />
+                    <div>
+                      <div style={{ fontFamily: tokens.serif, fontSize: 22, fontWeight: 500, lineHeight: 1.05 }}>{p.protocol}</div>
+                      <div style={{ fontFamily: tokens.mono, fontSize: 11, color: 'rgba(128,128,128,0.78)', marginTop: 4 }}>
+                        {legs} leg{legs === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                  </div>
+                  <ArcGauge value={Math.min(1, p.ltv / Math.max(p.liquidation_threshold, 0.01))} size={84} />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14, position: 'relative' }}>
+                  <div>
+                    <Eyebrow>Collateral</Eyebrow>
+                    <div style={{ fontFamily: tokens.mono, fontSize: 17, fontWeight: 600, marginTop: 4 }}>{fmtUsd(p.total_collateral_usd)}</div>
+                  </div>
+                  <div>
+                    <Eyebrow>Borrowed</Eyebrow>
+                    <div style={{ fontFamily: tokens.mono, fontSize: 17, fontWeight: 600, marginTop: 4 }}>{fmtUsd(p.total_borrow_usd)}</div>
+                  </div>
+                </div>
+                <div style={{ marginTop: 14, height: 5, background: 'var(--surface-3)', borderRadius: 3, position: 'relative', overflow: 'hidden' }}>
+                  <motion.div
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(100, (p.ltv / p.liquidation_threshold) * 100)}%` }}
+                    transition={{ duration: 0.9, ease: 'easeOut' }}
+                    style={{
+                      height: '100%',
+                      background: p.ltv > p.liquidation_threshold * 0.9 ? tokens.rust : p.ltv > p.liquidation_threshold * 0.75 ? '#c69423' : tokens.moss,
+                    }}
+                  />
+                </div>
+              </Card>
+            </Link>
+          </motion.div>
+        );
+      })}
+    </section>
+  );
+}
+
+function RiskSummary({ alerts }: { alerts: Alert[] }) {
+  const dots: Record<Severity, string> = { Info: 'color-mix(in oklab, var(--ink) 55%, transparent)', Warning: '#c69423', Critical: 'var(--rust)' };
+  return (
+    <Card pad={24}>
+      <Eyebrow>AI risk summary</Eyebrow>
+      <div style={{ display: 'grid', gap: 16, marginTop: 20 }}>
+        {alerts.slice(0, 3).map((a) => (
+          <div key={a.id} style={{ display: 'grid', gridTemplateColumns: '14px 1fr', gap: 10 }}>
+            <span style={{ color: dots[a.severity], fontFamily: tokens.mono }}>●</span>
+            <div>
+              <div style={{ fontFamily: tokens.sans, fontSize: 15, lineHeight: 1.45 }}>{a.title}</div>
+              <div style={{ fontFamily: tokens.mono, fontSize: 11, color: 'color-mix(in oklab, var(--ink) 52%, transparent)', marginTop: 5 }}>{timeAgo(a.created_at)}</div>
+            </div>
           </div>
-          <div
-            style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 13,
-              color: '#7DA87B',
-            }}
-          >
-            {fmtUsd(data.total_collateral_usd)}
-          </div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div
-            style={{
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 10,
-              color: 'rgba(245,244,239,0.3)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.06em',
-              marginBottom: 3,
-            }}
-          >
-            Borrow
-          </div>
-          <div
-            style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 13,
-              color: '#E4A853',
-            }}
-          >
-            {fmtUsd(data.total_borrow_usd)}
-          </div>
-        </div>
+        ))}
       </div>
+      <Link to="/alerts" style={{ display: 'inline-flex', marginTop: 20, color: tokens.ink2, fontFamily: tokens.sans, textDecoration: 'none' }}>
+        Why? →
+      </Link>
     </Card>
   );
 }
 
-function AlertRow({ alert }: { alert: Alert }) {
-  const c = { Info: '#7AA2C2', Warning: '#E4A853', Critical: '#D9604E' }[alert.severity];
+/** Enhanced health chart with gradient fill and red pulsing dot at the head */
+function HealthLine({ value }: { value: string }) {
+  // SVG path data for a health trend line
+  const pathD = 'M8 66 C46 28 78 34 112 72 S184 94 222 58 284 50 312 88';
+  // End point of the curve
+  const endX = 312;
+  const endY = 88;
+
   return (
-    <div
-      style={{
-        background: '#2A2826',
-        borderRadius: 14,
-        border: '1px solid rgba(255,255,255,0.06)',
-        borderLeft: `3px solid ${c}`,
-        padding: '14px 18px',
-        display: 'flex',
-        gap: 14,
-        alignItems: 'flex-start',
-      }}
-    >
-      <SeverityBadge severity={alert.severity} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 13,
-            fontWeight: 600,
-            color: '#F5F4EF',
-            marginBottom: 2,
-          }}
-        >
-          {alert.title}
-        </div>
-        <div
-          style={{
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 12,
-            color: 'rgba(245,244,239,0.4)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {alert.message}
-        </div>
-      </div>
-      <div
-        style={{
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 11,
-          color: 'rgba(245,244,239,0.25)',
-          flexShrink: 0,
-        }}
-      >
-        {timeAgo(alert.created_at)}
+    <div style={{ paddingTop: 20 }}>
+      <svg width="100%" height="120" viewBox="0 0 320 120" fill="none" aria-label="30 day health trend">
+        {/* Gradient definition */}
+        <defs>
+          <linearGradient id="healthGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--cobalt)" stopOpacity="0.2" />
+            <stop offset="100%" stopColor="var(--cobalt)" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+
+        {/* Gradient fill area under the curve */}
+        <path
+          d={`${pathD} L 312 120 L 8 120 Z`}
+          fill="url(#healthGradient)"
+        />
+
+        {/* Main line */}
+        <motion.path
+          d={pathD}
+          stroke="var(--cobalt)"
+          strokeWidth="2.5"
+          fill="none"
+          strokeLinecap="round"
+          initial={{ pathLength: 0 }}
+          animate={{ pathLength: 1 }}
+          transition={{ duration: 1.2, ease: 'easeOut' }}
+        />
+
+        {/* Pulsing red ring at the head */}
+        <motion.circle
+          cx={endX}
+          cy={endY}
+          r="6"
+          fill="none"
+          stroke="var(--rust)"
+          strokeWidth="1.5"
+          initial={{ r: 4, opacity: 0.6 }}
+          animate={{ r: 12, opacity: 0 }}
+          transition={{ duration: 1.5, repeat: Infinity, ease: 'easeOut' }}
+        />
+
+        {/* Solid red dot at the head */}
+        <circle
+          cx={endX}
+          cy={endY}
+          r="4"
+          fill="var(--rust)"
+        />
+      </svg>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: tokens.sans, color: 'color-mix(in oklab, var(--ink) 57%, transparent)' }}>
+        <span>Now</span>
+        <strong style={{ fontFamily: tokens.mono, color: tokens.ink }}>{value}</strong>
       </div>
     </div>
   );
 }
-

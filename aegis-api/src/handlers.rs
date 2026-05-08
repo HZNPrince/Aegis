@@ -1,10 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+//! HTTP request handlers — implements all API endpoints for the REST server.
+//! Provides status, prices, health, guard rules, alerts, intents, and wallet management.
+//! All handlers receive AppState and return JSON responses; errors are logged but don't crash the server.
 
 use aegis_alerts::engine::load_guard_rules;
 use aegis_core::{
     state::AppState,
     types::{ActionKind, AlertRecord, AlertSeverity, GuardRule, TriggerKind},
 };
+use aegis_executor::ExecutorContext;
 use aegis_risk::{
     health::wallet_risk,
     scenario::{ScenarioRequest, ScenarioResponse, simulate},
@@ -14,9 +17,20 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use serde::Serialize;
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tracing::error;
+
+/// Lazy-init shared ExecutorContext — keeps one RpcClient pool alive across requests.
+fn executor_ctx() -> &'static ExecutorContext {
+    static CTX: OnceLock<ExecutorContext> = OnceLock::new();
+    CTX.get_or_init(|| {
+        let url = std::env::var("RPC_ENDPOINT")
+            .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+        ExecutorContext::new(&url)
+    })
+}
 
 #[derive(Serialize)]
 pub struct StatusResponse {
@@ -375,6 +389,8 @@ pub async fn link_telegram(
     .await
     .map_err(internal_error)?;
 
+    state.telegram_chat_ids.insert(wallet.clone(), body.chat_id);
+
     // Send a rich welcome message with current positions — non-fatal if bot token is missing.
     if let Ok(token) = std::env::var("TELEGRAM_BOT_TOKEN") {
         let risk = wallet_risk(&state, &wallet);
@@ -395,6 +411,181 @@ pub async fn link_telegram(
         }
     }
 
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ─── Telegram one-time-code linking ─────────────────────────────────────────
+//
+// Flow:
+//   1. Frontend POSTs /api/wallets/:wallet/telegram/code → stores a 10-min
+//      code and returns it + a Telegram deep link.
+//   2. User opens the deep link → Telegram sends `/start <code>` to the bot.
+//   3. Bot POSTs /api/telegram/redeem {code, chat_id} → server looks up the
+//      wallet by code, links chat_id, deletes the code. Idempotent.
+//   4. Frontend polls GET /api/wallets/:wallet (existing) to flip the status.
+
+const LINK_CODE_TTL_SECS: i64 = 600; // 10 minutes
+
+#[derive(Serialize)]
+pub struct CreateLinkCodeResponse {
+    pub code: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub deep_link: String,
+}
+
+/// Generate `AEG-XXXX-XXXX` from a v4 uuid's hex digits. ~4B keyspace per
+/// 10-min window — collisions are vanishingly unlikely for a single user.
+fn generate_link_code() -> String {
+    let hex = uuid::Uuid::new_v4().simple().to_string().to_uppercase();
+    format!("AEG-{}-{}", &hex[..4], &hex[4..8])
+}
+
+pub async fn create_telegram_link_code(
+    State(state): State<Arc<AppState>>,
+    Path(wallet): Path<String>,
+) -> Result<Json<CreateLinkCodeResponse>, (StatusCode, String)> {
+    // Wallet must exist — link_wallet creates the row, so the frontend should
+    // call POST /api/wallets/:wallet first. We don't auto-create here because
+    // this endpoint is about confirming an existing connection, not registering.
+    let exists = sqlx::query("SELECT 1 FROM wallets WHERE pubkey = $1")
+        .bind(&wallet)
+        .fetch_optional(&state.db_pool)
+        .await
+        .map_err(internal_error)?;
+    if exists.is_none() {
+        return Err((StatusCode::NOT_FOUND, "wallet not found".to_string()));
+    }
+
+    // Sweep expired codes for this wallet so we never accumulate dead rows.
+    let _ = sqlx::query(
+        "DELETE FROM telegram_link_codes WHERE wallet_pubkey = $1 AND expires_at < NOW()",
+    )
+    .bind(&wallet)
+    .execute(&state.db_pool)
+    .await;
+
+    let code = generate_link_code();
+    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(LINK_CODE_TTL_SECS);
+
+    sqlx::query(
+        "INSERT INTO telegram_link_codes (code, wallet_pubkey, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(&code)
+    .bind(&wallet)
+    .bind(expires_at)
+    .execute(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    let bot_username =
+        std::env::var("TELEGRAM_BOT_USERNAME").unwrap_or_else(|_| "AegisBot".to_string());
+    let deep_link = format!("https://t.me/{}?start={}", bot_username, code);
+
+    Ok(Json(CreateLinkCodeResponse {
+        code,
+        expires_at,
+        deep_link,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct RedeemLinkCodeBody {
+    pub code: String,
+    pub chat_id: i64,
+}
+
+#[derive(Serialize)]
+pub struct RedeemLinkCodeResponse {
+    pub wallet: String,
+}
+
+/// Bot-only: exchange a one-time code for a wallet binding. On success the
+/// wallet's telegram_chat_id is set and the code is consumed.
+pub async fn redeem_telegram_link_code(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RedeemLinkCodeBody>,
+) -> Result<Json<RedeemLinkCodeResponse>, (StatusCode, String)> {
+    let code = body.code.trim().to_uppercase();
+
+    let row = sqlx::query(
+        "SELECT wallet_pubkey, expires_at FROM telegram_link_codes WHERE code = $1",
+    )
+    .bind(&code)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "invalid or already-used code".to_string()));
+    };
+
+    let wallet: String = row.try_get("wallet_pubkey").map_err(internal_error)?;
+    let expires_at: chrono::DateTime<chrono::Utc> =
+        row.try_get("expires_at").map_err(internal_error)?;
+
+    if expires_at < chrono::Utc::now() {
+        let _ = sqlx::query("DELETE FROM telegram_link_codes WHERE code = $1")
+            .bind(&code)
+            .execute(&state.db_pool)
+            .await;
+        return Err((StatusCode::GONE, "code expired — request a fresh one".to_string()));
+    }
+
+    // Spoof guard: if the wallet is already bound to a different chat_id, reject.
+    // A re-link to the same chat is idempotent (allowed).
+    let existing: Option<i64> = sqlx::query_scalar(
+        "SELECT telegram_chat_id FROM wallets WHERE pubkey = $1",
+    )
+    .bind(&wallet)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(internal_error)?
+    .flatten();
+
+    if let Some(current) = existing {
+        if current != body.chat_id {
+            return Err((
+                StatusCode::CONFLICT,
+                "wallet already linked to a different Telegram chat".to_string(),
+            ));
+        }
+    } else {
+        sqlx::query("UPDATE wallets SET telegram_chat_id = $1 WHERE pubkey = $2")
+            .bind(body.chat_id)
+            .bind(&wallet)
+            .execute(&state.db_pool)
+            .await
+            .map_err(internal_error)?;
+        state.telegram_chat_ids.insert(wallet.clone(), body.chat_id);
+    }
+
+    // Consume the code so it can't be replayed.
+    let _ = sqlx::query("DELETE FROM telegram_link_codes WHERE code = $1")
+        .bind(&code)
+        .execute(&state.db_pool)
+        .await;
+
+    Ok(Json(RedeemLinkCodeResponse { wallet }))
+}
+
+/// Detach the Telegram chat from a wallet. Used by the bot's /unlink command.
+pub async fn unlink_telegram(
+    State(state): State<Arc<AppState>>,
+    Path(wallet): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let result = sqlx::query(
+        "UPDATE wallets SET telegram_chat_id = NULL WHERE pubkey = $1",
+    )
+    .bind(&wallet)
+    .execute(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    if result.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "wallet not found".to_string()));
+    }
+
+    state.telegram_chat_ids.remove(&wallet);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -522,4 +713,389 @@ fn format_welcome_message(wallet: &str, risk: &aegis_core::types::WalletRisk) ->
 
 fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+}
+
+// ─── Repay intents ───────────────────────────────────────────────────────────
+
+/// Simulate an unsigned transaction against the RPC to catch program errors
+/// at build time (before the user is asked to sign). Returns Err with the
+/// program logs if the simulation rejects the tx.
+async fn simulate_unsigned_tx(tx_base64: &str) -> Result<(), (StatusCode, String)> {
+    let rpc_url = std::env::var("RPC_ENDPOINT")
+        .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "simulateTransaction",
+        "params": [
+            tx_base64,
+            {
+                "encoding": "base64",
+                "sigVerify": false,
+                "replaceRecentBlockhash": true,
+                "commitment": "confirmed"
+            }
+        ]
+    });
+
+    let resp: serde_json::Value = reqwest::Client::new()
+        .post(&rpc_url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("simulate rpc: {e}")))?
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("simulate decode: {e}")))?;
+
+    // If the RPC itself returned an error envelope, treat it as transport.
+    if let Some(err) = resp.get("error") {
+        let msg = err
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("rpc envelope error")
+            .to_string();
+        return Err((StatusCode::BAD_GATEWAY, format!("simulate envelope: {msg}")));
+    }
+
+    // Inspect the simulation result.
+    let value = resp.pointer("/result/value").cloned().unwrap_or_default();
+    let logs: Vec<String> = value
+        .get("logs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|l| l.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let sim_err = value.get("err");
+    let is_err = sim_err.map(|v| !v.is_null()).unwrap_or(false);
+
+    if is_err {
+        let err_str = sim_err
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unknown sim error".to_string());
+
+        tracing::warn!(
+            "█ [preflight FAILED] err={}\n{}",
+            err_str,
+            logs.join("\n")
+        );
+
+        let body = format!(
+            "Preflight simulation rejected the tx.\n\nError: {}\n\nProgram logs:\n{}",
+            err_str,
+            logs.join("\n")
+        );
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, body));
+    }
+
+    tracing::info!(
+        "█ [preflight OK] units_consumed={}",
+        value
+            .get("unitsConsumed")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+    );
+    Ok(())
+}
+
+
+#[derive(Deserialize)]
+pub struct CreateRepayIntentBody {
+    pub wallet: String,
+    /// Obligation pubkey (Kamino/Save) or marginfi account pubkey.
+    pub position_pubkey: String,
+    pub protocol: String,
+    pub reserve_or_bank: String,
+    pub mint: String,
+    /// Native units (pre-decimals). String to dodge JS number precision on u64.
+    pub amount_native: String,
+    pub rule_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct CreateRepayIntentResponse {
+    pub intent_id: String,
+    pub tx_base64: String,
+    pub last_valid_block_height: i64,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn create_repay_intent(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateRepayIntentBody>,
+) -> Result<Json<CreateRepayIntentResponse>, (StatusCode, String)> {
+    let amount: u64 = body
+        .amount_native
+        .parse()
+        .map_err(|_| (StatusCode::BAD_REQUEST, "amount_native must be a u64 string".to_string()))?;
+    if amount == 0 {
+        return Err((StatusCode::BAD_REQUEST, "amount_native must be > 0".to_string()));
+    }
+
+    let req = aegis_executor::BuildRepayRequest {
+        wallet: body.wallet.clone(),
+        obligation_or_account: body.position_pubkey.clone(),
+        protocol: body.protocol.clone(),
+        reserve_or_bank: body.reserve_or_bank.clone(),
+        mint: body.mint.clone(),
+        amount_native: amount,
+        rule: None,
+    };
+
+    let unsigned = aegis_executor::build_repay_tx(executor_ctx(), &req)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("build tx: {e}")))?;
+
+    // Preflight simulation BEFORE the user signs. Uses sigVerify=false +
+    // replaceRecentBlockhash=true so we can simulate the unsigned tx as-is.
+    // If on-chain rejects the IX (wrong account, missing refresh, etc.), this
+    // catches it now and surfaces the program logs to both stdout and the response.
+    if let Err((code, msg)) = simulate_unsigned_tx(&unsigned.tx_base64).await {
+        return Err((code, msg));
+    }
+
+    let expires_at =
+        chrono::Utc::now() + chrono::Duration::seconds(executor_ctx().intent_ttl_secs);
+
+    let rule_uuid: Option<uuid::Uuid> = body
+        .rule_id
+        .as_deref()
+        .and_then(|s| uuid::Uuid::parse_str(s).ok());
+
+    let row = sqlx::query(
+        "INSERT INTO execution_intents
+         (wallet_pubkey, guard_rule_id, protocol, obligation_or_account, reserve_or_bank, mint, amount_native, unsigned_tx, last_valid_block_height, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id",
+    )
+    .bind(&body.wallet)
+    .bind(rule_uuid)
+    .bind(&body.protocol)
+    .bind(&body.position_pubkey)
+    .bind(&body.reserve_or_bank)
+    .bind(&body.mint)
+    .bind(amount as i64)
+    .bind(&unsigned.tx_base64)
+    .bind(unsigned.last_valid_block_height as i64)
+    .bind(expires_at)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    let intent_id: uuid::Uuid = row.try_get("id").map_err(internal_error)?;
+
+    Ok(Json(CreateRepayIntentResponse {
+        intent_id: intent_id.to_string(),
+        tx_base64: unsigned.tx_base64,
+        last_valid_block_height: unsigned.last_valid_block_height as i64,
+        expires_at,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct SubmitIntentBody {
+    pub signed_tx_base64: String,
+}
+
+#[derive(Serialize)]
+pub struct SubmitIntentResponse {
+    pub signature: String,
+}
+
+pub async fn submit_intent(
+    State(state): State<Arc<AppState>>,
+    Path(intent_id): Path<String>,
+    Json(body): Json<SubmitIntentBody>,
+) -> Result<Json<SubmitIntentResponse>, (StatusCode, String)> {
+    let intent_uuid: uuid::Uuid = uuid::Uuid::parse_str(&intent_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid intent id".to_string()))?;
+
+    let row = sqlx::query(
+        "SELECT status, expires_at FROM execution_intents WHERE id = $1",
+    )
+    .bind(intent_uuid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "intent not found".to_string()));
+    };
+
+    let status: String = row.try_get("status").map_err(internal_error)?;
+    let expires_at: chrono::DateTime<chrono::Utc> =
+        row.try_get("expires_at").map_err(internal_error)?;
+
+    if status != "pending" {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("intent is {status}, cannot resubmit"),
+        ));
+    }
+    if expires_at < chrono::Utc::now() {
+        let _ = sqlx::query(
+            "UPDATE execution_intents SET status = 'expired', updated_at = NOW() WHERE id = $1",
+        )
+        .bind(intent_uuid)
+        .execute(&state.db_pool)
+        .await;
+        return Err((
+            StatusCode::GONE,
+            "intent expired — request a fresh repay".to_string(),
+        ));
+    }
+
+    // Validate base64 decodes — but ship the original string to the RPC since
+    // sendTransaction with `encoding: "base64"` expects the encoded form.
+    B64.decode(&body.signed_tx_base64)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid base64: {e}")))?;
+
+    // Call JSON-RPC sendTransaction directly — dodges the type-mismatch dance
+    // between solana-sdk's re-exported VersionedTransaction and solana-rpc-client's
+    // SerializableTransaction trait bound (different crate versions in our tree).
+    let rpc_url = std::env::var("RPC_ENDPOINT")
+        .unwrap_or_else(|_| "https://api.mainnet-beta.solana.com".to_string());
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "sendTransaction",
+        "params": [
+            body.signed_tx_base64,
+            { "encoding": "base64", "skipPreflight": false, "preflightCommitment": "confirmed" }
+        ]
+    });
+
+    let rpc_resp: serde_json::Value = reqwest::Client::new()
+        .post(&rpc_url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("rpc send: {e}")))?
+        .json()
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("rpc decode: {e}")))?;
+
+    if let Some(err) = rpc_resp.get("error") {
+        // Build a rich error: top-level message + program msg!() logs from preflight.
+        // The logs are what tell us which on-chain check actually rejected the tx.
+        let top_msg = err
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown rpc error")
+            .to_string();
+
+        let logs: Vec<String> = err
+            .pointer("/data/logs")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|l| l.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Also surface preflight return-data, which sometimes carries the Anchor error.
+        let preflight_err = err
+            .pointer("/data/err")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+
+        tracing::warn!(
+            "[intent {}] tx rejected: {} | err={} | logs:\n{}",
+            intent_uuid,
+            top_msg,
+            preflight_err,
+            logs.join("\n")
+        );
+
+        let combined = if logs.is_empty() {
+            top_msg.clone()
+        } else {
+            format!("{}\n\nProgram logs:\n{}", top_msg, logs.join("\n"))
+        };
+
+        let pool = state.db_pool.clone();
+        let err_msg = combined.clone();
+        tokio::spawn(async move {
+            let _ = sqlx::query(
+                "UPDATE execution_intents SET status = 'cancelled', error = $1, updated_at = NOW() WHERE id = $2",
+            )
+            .bind(err_msg)
+            .bind(intent_uuid)
+            .execute(&pool)
+            .await;
+        });
+        return Err((StatusCode::BAD_GATEWAY, combined));
+    }
+
+    let sig_str = rpc_resp
+        .get("result")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "rpc returned no signature".to_string()))?
+        .to_string();
+
+    sqlx::query(
+        "UPDATE execution_intents SET status = 'submitted', signature = $1, updated_at = NOW() WHERE id = $2",
+    )
+    .bind(&sig_str)
+    .bind(intent_uuid)
+    .execute(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    Ok(Json(SubmitIntentResponse { signature: sig_str }))
+}
+
+#[derive(Serialize)]
+pub struct IntentResponse {
+    pub id: String,
+    pub status: String,
+    pub signature: Option<String>,
+    pub error: Option<String>,
+    pub protocol: String,
+    pub mint: String,
+    pub amount_native: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn get_intent(
+    State(state): State<Arc<AppState>>,
+    Path(intent_id): Path<String>,
+) -> Result<Json<IntentResponse>, (StatusCode, String)> {
+    let intent_uuid: uuid::Uuid = uuid::Uuid::parse_str(&intent_id)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid intent id".to_string()))?;
+
+    let row = sqlx::query(
+        "SELECT id, status, signature, error, protocol, mint, amount_native, created_at, expires_at
+         FROM execution_intents WHERE id = $1",
+    )
+    .bind(intent_uuid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(internal_error)?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "intent not found".to_string()));
+    };
+
+    Ok(Json(IntentResponse {
+        id: row
+            .try_get::<uuid::Uuid, _>("id")
+            .map_err(internal_error)?
+            .to_string(),
+        status: row.try_get("status").map_err(internal_error)?,
+        signature: row.try_get("signature").ok(),
+        error: row.try_get("error").ok(),
+        protocol: row.try_get("protocol").map_err(internal_error)?,
+        mint: row.try_get("mint").map_err(internal_error)?,
+        amount_native: row.try_get("amount_native").map_err(internal_error)?,
+        created_at: row.try_get("created_at").map_err(internal_error)?,
+        expires_at: row.try_get("expires_at").map_err(internal_error)?,
+    }))
 }

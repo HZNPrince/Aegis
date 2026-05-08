@@ -1,7 +1,7 @@
-//! Shared application state accessible across all async tasks.
-//!
-//! Uses DashMap (lock-free concurrent hashmap) for hot-path data that the
-//! gRPC stream writes and the API reads simultaneously.
+//! Shared application state — concurrent, lock-free data structures for real-time updates.
+//! Provides hot-path access to positions, prices, wallet metadata, and cached bank/reserve data
+//! without blocking between the gRPC stream (writer), parsers (readers), and API handlers.
+//! Uses DashMap (concurrent hashmap) to enable simultaneous reads from multiple subsystems.
 
 use std::sync::atomic::AtomicU64;
 
@@ -75,6 +75,10 @@ pub struct AppState {
     /// LTV improvements, and price impacts.
     /// On restart it's empty — delta checks skip the first cycle (None = no baseline).
     pub last_risk: DashMap<String, crate::types::WalletRisk>,
+    /// Wallet pubkey → linked Telegram chat_id. Populated at startup from
+    /// `wallets.telegram_chat_id` and on every successful PATCH so the alert
+    /// engine can route without hitting the DB on its hot path.
+    pub telegram_chat_ids: DashMap<String, i64>,
     pub db_pool: PgPool,
     /// Sender half of the DB writer channel. Both the gRPC stream and the
     /// backfill job push position updates through this single channel so the
@@ -95,6 +99,7 @@ impl AppState {
             reserve_cache: DashMap::new(),
             save_reserve_cache: DashMap::new(),
             last_risk: DashMap::new(),
+            telegram_chat_ids: DashMap::new(),
             db_pool,
             db_writer_tx,
         }

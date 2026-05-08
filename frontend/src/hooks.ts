@@ -1,6 +1,9 @@
+// React Query hooks — wraps API calls for data fetching and mutations.
+// Provides automatic caching, refetch intervals, and state management for all API operations.
+
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import type { GuardRuleWire, ScenarioRequest } from './types';
+import type { CreateRepayIntentRequest, GuardRuleWire, ScenarioRequest } from './types';
 
 export function useStatus() {
   return useQuery({
@@ -74,11 +77,27 @@ export function useLinkWallet() {
   });
 }
 
-export function useWalletSettings(wallet: string | null) {
+export function useWalletSettings(wallet: string | null, pollMs?: number) {
   return useQuery({
     queryKey: ['wallet-settings', wallet],
     queryFn: () => api.getWalletSettings(wallet!),
     enabled: !!wallet,
+    refetchInterval: pollMs,
+  });
+}
+
+export function useCreateTelegramLinkCode() {
+  return useMutation({
+    mutationFn: (wallet: string) => api.createTelegramLinkCode(wallet),
+  });
+}
+
+export function useUnlinkTelegram() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (wallet: string) => api.unlinkTelegram(wallet),
+    onSuccess: (_, wallet) =>
+      qc.invalidateQueries({ queryKey: ['wallet-settings', wallet] }),
   });
 }
 
@@ -103,5 +122,32 @@ export function useLinkEmail() {
   return useMutation({
     mutationFn: ({ wallet, email }: { wallet: string; email: string }) =>
       api.linkEmail(wallet, email),
+  });
+}
+
+export function useCreateRepayIntent() {
+  return useMutation({
+    mutationFn: (req: CreateRepayIntentRequest) => api.createRepayIntent(req),
+  });
+}
+
+export function useSubmitIntent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ intentId, signedTxBase64 }: { intentId: string; signedTxBase64: string }) =>
+      api.submitIntent(intentId, signedTxBase64),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['health'] });
+    },
+  });
+}
+
+export function useIntent(intentId: string | null) {
+  return useQuery({
+    queryKey: ['intent', intentId],
+    queryFn: () => api.getIntent(intentId!),
+    enabled: !!intentId,
+    refetchInterval: (q) =>
+      q.state.data?.status === 'submitted' ? 4_000 : false,
   });
 }

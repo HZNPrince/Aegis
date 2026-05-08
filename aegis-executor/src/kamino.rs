@@ -1,9 +1,6 @@
-//! Kamino (KLend) repay IX builder.
-//!
-//! Uses klend-sdk's generated `RepayObligationLiquidityBuilder`. We fetch the
-//! Reserve account from RPC to pull `lending_market`, `liquidity.supply_vault`
-//! (the destination), mint, and token program — these aren't all present in
-//! our indexer cache so we do a single RPC round-trip per build.
+//! Kamino (KLend) repay instruction builder — constructs RepayObligationLiquidity transaction.
+//! Fetches Reserve account from RPC to extract lending_market, supply_vault, and token_program.
+//! Used by: executor's build_repay_tx() for Kamino protocol repayments.
 
 use crate::{derive_ata, ExecutorError};
 use klend_sdk::{
@@ -20,7 +17,7 @@ pub async fn build_repay_ix(
     repay_reserve: Pubkey,
     _expected_mint: Pubkey,
     liquidity_amount: u64,
-) -> Result<Instruction, ExecutorError> {
+) -> Result<Vec<Instruction>, ExecutorError> {
     let account = rpc
         .get_account(&repay_reserve)
         .await
@@ -48,5 +45,5 @@ pub async fn build_repay_ix(
         .liquidity_amount(liquidity_amount)
         .instruction();
 
-    Ok(ix)
+    Ok(vec![ix])
 }

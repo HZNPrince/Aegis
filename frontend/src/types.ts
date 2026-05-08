@@ -1,3 +1,6 @@
+// TypeScript type definitions — mirrors Rust types from the backend.
+// All API responses and request payloads match these types for type safety across the frontend.
+
 export type Protocol = 'Kamino' | 'Save' | 'Marginfi';
 export type Severity = 'Info' | 'Warning' | 'Critical';
 export type Side = 'Collateral' | 'Borrow';
@@ -16,6 +19,10 @@ export interface Position {
   amount: number;
   value_usd: number;
   updated_at: string;
+  /// Kamino reserve / Save reserve / Marginfi bank pubkey. Required for repay tx build.
+  reserve_or_bank?: string;
+  /// Native units (pre-decimals). Used to compute exact repay amounts.
+  amount_native?: number;
 }
 
 export interface ProtocolLtv {
@@ -159,4 +166,36 @@ export interface AlertRecordWire {
   suggested_actions: string[];
   metadata: Record<string, unknown>;
   created_at?: string | null;
+}
+
+// ── Repay intent shapes ──
+
+export interface CreateRepayIntentRequest {
+  wallet: string;
+  position_pubkey: string;
+  protocol: string;
+  reserve_or_bank: string;
+  mint: string;
+  /// String to dodge JS u64 precision loss.
+  amount_native: string;
+  rule_id?: string | null;
+}
+
+export interface CreateRepayIntentResponse {
+  intent_id: string;
+  tx_base64: string;
+  last_valid_block_height: number;
+  expires_at: string;
+}
+
+export interface IntentStatus {
+  id: string;
+  status: 'pending' | 'signed' | 'submitted' | 'confirmed' | 'expired' | 'cancelled';
+  signature: string | null;
+  error: string | null;
+  protocol: string;
+  mint: string;
+  amount_native: number;
+  created_at: string;
+  expires_at: string;
 }

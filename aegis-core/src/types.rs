@@ -1,3 +1,7 @@
+//! Core data types — normalized position and risk structures used across all subsystems.
+//! Types are designed to be protocol-agnostic, allowing any Solana lending protocol to be parsed
+//! into these shared structures for unified risk calculation and API responses.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;

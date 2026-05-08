@@ -1,9 +1,15 @@
-//! Aegis Telegram bot.
+//! Aegis Telegram bot — `@aegis_alerter_bot`.
 //!
 //! Commands:
-//!   /start          — Welcome + usage
-//!   /link <pubkey>  — Link a Solana wallet to this chat
-//!   /status         — Current wallet health + positions + AI analysis
+//!   /start [code]   — Welcome + usage. With a code payload (deep-link from
+//!                     the dashboard), redeems it to link the wallet.
+//!   /help           — Compact reference for every command
+//!   /link <pubkey>  — Link a Solana wallet to this chat (legacy manual flow)
+//!   /unlink         — Detach this chat from its wallet
+//!   /status         — Wallet health + positions + AI analysis (verbose)
+//!   /positions      — Per-leg position breakdown (compact)
+//!   /prices         — Live prices + 24h Δ for assets you hold
+//!   /rules          — Active guard rules for your wallet
 
 use teloxide::{prelude::*, utils::command::BotCommands};
 use tracing::info;
@@ -11,12 +17,22 @@ use tracing::info;
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Aegis bot commands:")]
 enum Command {
-    #[command(description = "Show usage instructions")]
-    Start,
+    #[command(description = "Show usage instructions, or redeem a link code from the dashboard")]
+    Start(String),
+    #[command(description = "Show every command and what it does")]
+    Help,
     #[command(description = "Link your Solana wallet: /link <wallet_pubkey>")]
     Link(String),
+    #[command(description = "Detach this chat from its linked wallet")]
+    Unlink,
     #[command(rename = "bot_status", description = "Show your current positions and health score")]
     Status,
+    #[command(description = "Per-leg position breakdown")]
+    Positions,
+    #[command(description = "Live prices for assets in your positions")]
+    Prices,
+    #[command(description = "List your active guard rules")]
+    Rules,
 }
 
 #[tokio::main]
@@ -43,16 +59,80 @@ async fn main() {
 
 async fn handle_command(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<()> {
     match cmd {
-        Command::Start => {
+        Command::Start(payload) => {
+            let payload = payload.trim();
+            if payload.is_empty() {
+                bot.send_message(
+                    msg.chat.id,
+                    "👋 *Welcome to Aegis\\!*\n\n\
+                     I'm `@aegis_alerter_bot` — I watch your Solana lending positions on Kamino, Save, and Marginfi \
+                     and ping you when health drops or liquidation gets close\\.\n\n\
+                     *To connect:*\n\
+                     1\\. Open the Aegis dashboard, go to *Telegram*\n\
+                     2\\. Tap *Open @aegis\\_alerter\\_bot* — it'll send you back here with a code\n\n\
+                     Or manually: `/link <wallet_pubkey>`\n\n\
+                     Send `/help` any time to see every command\\.",
+                )
+                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                .await?;
+                return Ok(());
+            }
+
+            // Deep-link payload — redeem it for a wallet binding.
+            let chat_id = msg.chat.id.0;
+            match redeem_link_code(payload, chat_id).await {
+                Ok(wallet) => {
+                    let short = short_wallet(&wallet);
+                    match fetch_health(&wallet).await {
+                        Ok(Some(health)) => {
+                            let text = format_link_success(&short, &health);
+                            bot.send_message(msg.chat.id, text)
+                                .parse_mode(teloxide::types::ParseMode::Markdown)
+                                .await?;
+                        }
+                        _ => {
+                            bot.send_message(
+                                msg.chat.id,
+                                format!(
+                                    "✅ *Linked!* Wallet `{}` is now connected.\n\nSend /status at any time to check your positions.",
+                                    short
+                                ),
+                            )
+                            .parse_mode(teloxide::types::ParseMode::Markdown)
+                            .await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    bot.send_message(
+                        msg.chat.id,
+                        format!(
+                            "❌ Couldn't redeem that link code: {}\n\nGenerate a fresh one from the Aegis dashboard.",
+                            e
+                        ),
+                    )
+                    .await?;
+                }
+            }
+        }
+
+        Command::Help => {
             bot.send_message(
                 msg.chat.id,
-                "👋 *Welcome to Aegis!*\n\n\
-                 Aegis monitors your Solana lending positions on Kamino, Save, and Marginfi \
-                 and alerts you when your health drops or liquidation risk increases\\.\n\n\
-                 *Commands:*\n\
-                 `/link <wallet_pubkey>` — Connect your wallet\n\
-                 `/status` — Check current positions and health\n\n\
-                 Connect your wallet in the Aegis dashboard first, then run `/link`\\.",
+                "🛡️ *Aegis bot — command reference*\n\n\
+                 *Onboarding*\n\
+                 `/start` — welcome + how to link\n\
+                 `/start <code>` — redeem a link code from the dashboard \\(auto\\-deep\\-linked from the *Telegram* page\\)\n\
+                 `/link <wallet_pubkey>` — manual fallback if you don't have a code\n\
+                 `/unlink` — detach this chat from its wallet\n\n\
+                 *Live data*\n\
+                 `/bot_status` — weighted health, totals, AI risk read\n\
+                 `/positions` — per\\-leg breakdown across Kamino, Save, Marginfi\n\
+                 `/prices` — quotes \\+ 24h Δ for assets you hold\n\
+                 `/rules` — your active guardrails\n\n\
+                 *How alerts work*\n\
+                 You'll get a ping when a guardrail fires \\(e\\.g\\. _Health below 60_\\) or when liquidation risk spikes\\. Critical alerts include inline *Repay* / *Mute* buttons\\.\n\n\
+                 Open the dashboard at the link in your bio to set new guardrails or run a what\\-if scenario\\.",
             )
             .parse_mode(teloxide::types::ParseMode::MarkdownV2)
             .await?;
@@ -103,6 +183,152 @@ async fn handle_command(bot: Bot, msg: Message, cmd: Command) -> ResponseResult<
                             "❌ Couldn't link wallet: {}\n\nMake sure you've connected this wallet in the Aegis dashboard first.",
                             e
                         ),
+                    )
+                    .await?;
+                }
+            }
+        }
+
+        Command::Unlink => {
+            let chat_id = msg.chat.id.0;
+            match lookup_wallet_by_chat(chat_id).await {
+                Ok(wallet) => match unlink_wallet(&wallet).await {
+                    Ok(()) => {
+                        bot.send_message(
+                            msg.chat.id,
+                            format!(
+                                "🔓 Unlinked `{}`. You will not receive Aegis alerts here anymore.\n\nUse /link to re-attach.",
+                                short_wallet(&wallet)
+                            ),
+                        )
+                        .parse_mode(teloxide::types::ParseMode::Markdown)
+                        .await?;
+                    }
+                    Err(e) => {
+                        bot.send_message(msg.chat.id, format!("❌ Unlink failed: {e}"))
+                            .await?;
+                    }
+                },
+                Err(_) => {
+                    bot.send_message(msg.chat.id, "ℹ️ No wallet linked to this chat.")
+                        .await?;
+                }
+            }
+        }
+
+        Command::Positions => {
+            let wallet = match resolve_wallet(msg.chat.id.0).await {
+                Ok(w) => w,
+                Err(text) => {
+                    bot.send_message(msg.chat.id, text).await?;
+                    return Ok(());
+                }
+            };
+            match fetch_health(&wallet).await {
+                Ok(Some(health)) => {
+                    let mut lines = vec![
+                        "📊 *Positions*".to_string(),
+                        format!("Wallet `{}`", short_wallet(&wallet)),
+                        String::new(),
+                    ];
+                    lines.extend(position_lines(&health));
+                    lines.push(String::new());
+                    lines.push(health_summary_line(&health));
+                    bot.send_message(msg.chat.id, lines.join("\n"))
+                        .parse_mode(teloxide::types::ParseMode::Markdown)
+                        .await?;
+                }
+                _ => {
+                    bot.send_message(msg.chat.id, "ℹ️ No tracked positions for this wallet.")
+                        .await?;
+                }
+            }
+        }
+
+        Command::Prices => {
+            let wallet = match resolve_wallet(msg.chat.id.0).await {
+                Ok(w) => w,
+                Err(text) => {
+                    bot.send_message(msg.chat.id, text).await?;
+                    return Ok(());
+                }
+            };
+
+            let health = match fetch_health(&wallet).await {
+                Ok(Some(h)) => h,
+                _ => {
+                    bot.send_message(msg.chat.id, "ℹ️ No positions to price.").await?;
+                    return Ok(());
+                }
+            };
+
+            // Collect unique mints from the user's positions.
+            let mut mints: Vec<(String, String)> = Vec::new();
+            for pos in &health.positions {
+                for leg in &pos.legs {
+                    if !leg.asset_mint.is_empty()
+                        && !mints.iter().any(|(m, _)| *m == leg.asset_mint)
+                    {
+                        mints.push((leg.asset_mint.clone(), leg.asset_symbol.clone()));
+                    }
+                }
+            }
+
+            let ticker = fetch_ticker().await.unwrap_or_default();
+            let mut lines = vec!["💱 *Prices* (24h)".to_string(), String::new()];
+            if mints.is_empty() {
+                lines.push("_No mints found in your positions._".to_string());
+            } else {
+                for (mint, symbol) in mints {
+                    if let Some(t) = ticker.get(&mint) {
+                        let arrow = match t.change_24h {
+                            Some(c) if c >= 0.0 => format!(" 🟢 +{:.2}%", c),
+                            Some(c) => format!(" 🔴 {:.2}%", c),
+                            None => String::new(),
+                        };
+                        lines.push(format!("• *{}* — ${:.4}{}", symbol, t.price, arrow));
+                    } else {
+                        lines.push(format!("• *{}* — _no price_", symbol));
+                    }
+                }
+            }
+            bot.send_message(msg.chat.id, lines.join("\n"))
+                .parse_mode(teloxide::types::ParseMode::Markdown)
+                .await?;
+        }
+
+        Command::Rules => {
+            let wallet = match resolve_wallet(msg.chat.id.0).await {
+                Ok(w) => w,
+                Err(text) => {
+                    bot.send_message(msg.chat.id, text).await?;
+                    return Ok(());
+                }
+            };
+
+            match fetch_guard_rules(&wallet).await {
+                Ok(rules) if !rules.is_empty() => {
+                    let mut lines = vec![
+                        format!("🛡️ *Guard Rules* ({})", rules.len()),
+                        format!("Wallet `{}`", short_wallet(&wallet)),
+                        String::new(),
+                    ];
+                    for r in rules.iter().filter(|r| r.is_active) {
+                        lines.push(format_rule_line(r));
+                    }
+                    let inactive: Vec<_> = rules.iter().filter(|r| !r.is_active).collect();
+                    if !inactive.is_empty() {
+                        lines.push(String::new());
+                        lines.push(format!("_{} inactive rule(s) hidden_", inactive.len()));
+                    }
+                    bot.send_message(msg.chat.id, lines.join("\n"))
+                        .parse_mode(teloxide::types::ParseMode::Markdown)
+                        .await?;
+                }
+                _ => {
+                    bot.send_message(
+                        msg.chat.id,
+                        "📭 No guard rules yet. Open the Aegis dashboard to create one.",
                     )
                     .await?;
                 }
@@ -165,6 +391,26 @@ fn short_wallet(w: &str) -> String {
     } else {
         w.to_string()
     }
+}
+
+/// Exchange a one-time link code (from the dashboard's deep link) for a
+/// wallet binding. The server sets telegram_chat_id and consumes the code.
+async fn redeem_link_code(code: &str, chat_id: i64) -> anyhow::Result<String> {
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api/telegram/redeem", api_base()))
+        .json(&serde_json::json!({ "code": code, "chat_id": chat_id }))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        anyhow::bail!("{}: {}", status, resp.text().await.unwrap_or_default());
+    }
+    let json: serde_json::Value = resp.json().await?;
+    json["wallet"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("missing wallet field"))
 }
 
 async fn link_wallet_to_telegram(wallet: &str, chat_id: i64) -> anyhow::Result<()> {
@@ -230,6 +476,84 @@ struct LegData {
     side: String,
     amount_ui: f64,
     value_usd: f64,
+    #[serde(default)]
+    asset_mint: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TickerEntry {
+    price: f64,
+    change_24h: Option<f64>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GuardRuleData {
+    protocol: Option<String>,
+    trigger_kind: String,
+    trigger_value: f64,
+    action_kind: String,
+    cooldown_seconds: i64,
+    is_active: bool,
+}
+
+async fn unlink_wallet(wallet: &str) -> anyhow::Result<()> {
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/api/wallets/{}/telegram", api_base(), wallet))
+        .send()
+        .await?;
+    if resp.status().is_success() || resp.status() == reqwest::StatusCode::NO_CONTENT {
+        return Ok(());
+    }
+    anyhow::bail!("{}: {}", resp.status(), resp.text().await.unwrap_or_default())
+}
+
+async fn fetch_ticker() -> anyhow::Result<std::collections::HashMap<String, TickerEntry>> {
+    let url = format!("{}/api/ticker", api_base());
+    let resp = reqwest::get(&url).await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("ticker fetch failed: {}", resp.status());
+    }
+    Ok(resp.json().await?)
+}
+
+async fn fetch_guard_rules(wallet: &str) -> anyhow::Result<Vec<GuardRuleData>> {
+    let url = format!("{}/api/wallets/{}/guard-rules", api_base(), wallet);
+    let resp = reqwest::get(&url).await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("guard-rules fetch failed: {}", resp.status());
+    }
+    Ok(resp.json().await?)
+}
+
+/// Resolve a chat_id → linked wallet pubkey, or return a user-facing error message.
+async fn resolve_wallet(chat_id: i64) -> Result<String, String> {
+    lookup_wallet_by_chat(chat_id)
+        .await
+        .map_err(|_| "⚠️ No wallet linked to this chat. Use /link <wallet_pubkey> first.".to_string())
+}
+
+fn format_rule_line(r: &GuardRuleData) -> String {
+    let trigger = match r.trigger_kind.as_str() {
+        "health_below" => format!("Health < {:.0}", r.trigger_value),
+        "ltv_above" => format!("LTV > {:.0}%", r.trigger_value * 100.0),
+        "debt_above_usd" => format!("Debt > ${:.0}", r.trigger_value),
+        "health_dropped" => format!("Health drops {:.0}%", r.trigger_value * 100.0),
+        other => other.to_string(),
+    };
+    let action = match r.action_kind.as_str() {
+        "notify_only" => "Notify",
+        "add_collateral" => "Add collateral",
+        "repay_debt" => "Repay debt",
+        "deleverage" => "Deleverage",
+        other => other,
+    };
+    let proto = r.protocol.as_deref().unwrap_or("All");
+    let cool = if r.cooldown_seconds >= 3600 {
+        format!("{}h cooldown", r.cooldown_seconds / 3600)
+    } else {
+        format!("{}m cooldown", r.cooldown_seconds / 60)
+    };
+    format!("• [{}] {} → {} · {}", proto, trigger, action, cool)
 }
 
 async fn fetch_health(wallet: &str) -> anyhow::Result<Option<WalletHealth>> {

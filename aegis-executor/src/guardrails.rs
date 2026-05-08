@@ -1,9 +1,7 @@
-//! Executor-side guardrails. These run after the alerts engine has decided
-//! to emit a RepayDebt intent — they defend the tx-build path against
-//! obviously-bad requests (zero amount, mismatched protocol, budget cap).
-//!
-//! Rule-level cooldowns and last-fired tracking live in the alerts engine;
-//! we don't re-check them here.
+//! Executor-side validation — guardrails that defend tx-building against obviously-bad requests.
+//! Validates: amount > 0, protocol match, rule active, USD cap not bypassed, etc.
+//! Rule-level cooldowns and last-fired tracking live in the alert engine, not here.
+//! Used by: executor's build_repay_tx() before creating any instruction.
 
 use crate::{BuildRepayRequest, ExecutorError};
 use aegis_core::types::ActionKind;

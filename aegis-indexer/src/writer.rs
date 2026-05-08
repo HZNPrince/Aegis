@@ -1,8 +1,6 @@
-//! Database writer — the only task that writes position updates to Postgres.
-//!
-//! Owning all writes in one task gives us: (a) natural backpressure via the
-//! mpsc channel, (b) a single place to batch if we want to later, (c) no
-//! write-write races across the gRPC stream and backfill paths.
+//! Database writer — single-threaded writer for all position updates to PostgreSQL.
+//! Centralizes writes to prevent race conditions; both gRPC stream and backfill push through this channel.
+//! Used by: aegis-server at startup, which spawns this task to drain the mpsc channel.
 
 use std::sync::Arc;
 

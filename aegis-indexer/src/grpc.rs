@@ -1,11 +1,6 @@
-//! gRPC stream — subscribes to all lending protocol account updates via Yellowstone
-//! and dispatches them to protocol-specific parsers.
-//!
-//! The public entrypoint `start_account_stream` is a supervisor: it runs
-//! `run_session` in a loop and reconnects with jittered exponential backoff
-//! when the session errors or ends cleanly. Durable resources (state, parsers,
-//! the DB writer channel) live across reconnects; only the gRPC client and
-//! stream are re-created per session.
+//! gRPC stream supervisor — subscribes to Kamino, Marginfi, and Save account updates via Yellowstone.
+//! Dispatches updates to protocol-specific parsers, handles reconnection with exponential backoff.
+//! Used by: aegis-server's main() as the final long-running task that never returns.
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
