@@ -79,6 +79,11 @@ export function RepayModal({
     'idle',
   );
   const [signature, setSignature] = useState<string | null>(null);
+  // True iff the user clicked Max — reset on any other interaction. Drives the
+  // backend's repay_all flag so we use the protocol's "repay everything"
+  // sentinel instead of the indexer-cached amount (which can be stale by the
+  // time the tx lands and leave dust behind).
+  const [repayAll, setRepayAll] = useState(false);
 
   useEffect(() => {
     setAmount(fmtTokenAmount(position.amount, position.asset_symbol));
@@ -142,6 +147,7 @@ export function RepayModal({
         reserve_or_bank: position.reserve_or_bank,
         mint: position.asset_mint,
         amount_native: amountNative.toString(),
+        repay_all: repayAll,
       });
 
       if (!isBase64Tx(intent.tx_base64)) {
@@ -346,7 +352,10 @@ export function RepayModal({
               <Label>Amount to repay ({position.asset_symbol})</Label>
               <button
                 type="button"
-                onClick={() => setAmount(fmtTokenAmount(position.amount, position.asset_symbol))}
+                onClick={() => {
+                  setAmount(fmtTokenAmount(position.amount, position.asset_symbol));
+                  setRepayAll(true);
+                }}
                 disabled={busy}
                 style={{
                   background: 'transparent',
@@ -364,7 +373,7 @@ export function RepayModal({
             </div>
             <input
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={(e) => { setAmount(e.target.value); setRepayAll(false); }}
               type="number"
               step="any"
               min="0"
@@ -409,7 +418,10 @@ export function RepayModal({
                 return (
                   <button
                     key={label}
-                    onClick={() => setAmount(fmtTokenAmount(target, position.asset_symbol))}
+                    onClick={() => {
+                      setAmount(fmtTokenAmount(target, position.asset_symbol));
+                      setRepayAll(pct === 1);
+                    }}
                     disabled={busy}
                     style={{
                       flex: 1,

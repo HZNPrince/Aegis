@@ -33,6 +33,11 @@ pub struct BuildRepayRequest {
     pub reserve_or_bank: String,
     pub mint: String,
     pub amount_native: u64,
+    /// When true, build a "repay everything" tx (Save/Kamino: u64::MAX sentinel,
+    /// Marginfi: repay_all=Some(true)) so dust + accrued-interest races between
+    /// the indexer cache and on-chain state can't strand a leg.
+    #[serde(default)]
+    pub repay_all: bool,
     pub rule: Option<GuardRule>,
 }
 
@@ -53,6 +58,7 @@ impl BuildRepayRequest {
             reserve_or_bank: leg.reserve_or_bank.clone(),
             mint: leg.asset_mint.clone(),
             amount_native,
+            repay_all: false,
             rule,
         }
     }
@@ -113,11 +119,18 @@ pub async fn build_repay_tx(
     // Distinctive banner: if you don't see this in `cargo run -p aegis-server`
     // stdout when clicking Repay, the *old* binary is running.
     tracing::info!(
-        "█ [executor v3 — chain-fetched token_program + raw-offset bank decode] build_repay_tx: protocol={} wallet={} mint={} amount_native={}",
-        req.protocol, req.wallet, req.mint, req.amount_native
+        "█ [executor v3 — chain-fetched token_program + raw-offset bank decode] build_repay_tx: protocol={} wallet={} mint={} amount_native={} repay_all={}",
+        req.protocol, req.wallet, req.mint, req.amount_native, req.repay_all
     );
 
     guardrails::validate(req)?;
+
+    // Save & Kamino use u64::MAX as the canonical "repay everything" sentinel.
+    // Marginfi has its own repay_all bool wired in marginfi::build_repay_ix.
+    let amount_for_proto = match req.protocol.as_str() {
+        "SAVE" | "Save" | "Kamino" if req.repay_all => u64::MAX,
+        _ => req.amount_native,
+    };
 
     let wallet = parse_pubkey(&req.wallet, "wallet")?;
     let mint = parse_pubkey(&req.mint, "mint")?;
@@ -146,7 +159,7 @@ pub async fn build_repay_tx(
                 obligation_or_account,
                 reserve_or_bank,
                 mint,
-                req.amount_native,
+                amount_for_proto,
             )
             .await?
         }
@@ -157,7 +170,7 @@ pub async fn build_repay_tx(
                 obligation_or_account,
                 reserve_or_bank,
                 mint,
-                req.amount_native,
+                amount_for_proto,
             )
             .await?
         }
@@ -169,6 +182,7 @@ pub async fn build_repay_tx(
                 reserve_or_bank,
                 mint,
                 req.amount_native,
+                req.repay_all,
             )
             .await?
         }

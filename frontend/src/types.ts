@@ -178,6 +178,10 @@ export interface CreateRepayIntentRequest {
   mint: string;
   /// String to dodge JS u64 precision loss.
   amount_native: string;
+  /// True for "repay everything" — backend uses protocol-specific sentinel
+  /// (u64::MAX for Save/Kamino, repay_all flag for Marginfi) so dust /
+  /// accrued-interest races between cache and chain don't strand a leg.
+  repay_all?: boolean;
   rule_id?: string | null;
 }
 

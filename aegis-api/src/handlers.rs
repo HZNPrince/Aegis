@@ -816,6 +816,10 @@ pub struct CreateRepayIntentBody {
     pub mint: String,
     /// Native units (pre-decimals). String to dodge JS number precision on u64.
     pub amount_native: String,
+    /// When true, build a "repay everything" tx and ignore amount_native at the
+    /// protocol layer. Avoids dust/interest-accrual races on Max-style flows.
+    #[serde(default)]
+    pub repay_all: bool,
     pub rule_id: Option<String>,
 }
 
@@ -846,6 +850,7 @@ pub async fn create_repay_intent(
         reserve_or_bank: body.reserve_or_bank.clone(),
         mint: body.mint.clone(),
         amount_native: amount,
+        repay_all: body.repay_all,
         rule: None,
     };
 

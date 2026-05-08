@@ -57,6 +57,7 @@ pub async fn build_repay_ix(
     bank_pk: Pubkey,
     expected_mint: Pubkey,
     amount: u64,
+    repay_all: bool,
 ) -> Result<Vec<Instruction>, ExecutorError> {
     let account = rpc
         .get_account(&bank_pk)
@@ -100,7 +101,7 @@ pub async fn build_repay_ix(
     data.extend_from_slice(&DISCRIMINATOR);
     let args = RepayArgs {
         amount,
-        repay_all: None,
+        repay_all: if repay_all { Some(true) } else { None },
     };
     args.serialize(&mut data)
         .map_err(|e| ExecutorError::Decode(format!("serialize repay args: {e}")))?;
