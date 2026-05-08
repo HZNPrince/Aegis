@@ -89,9 +89,7 @@ function useTheme(): [string, (e?: { clientX: number; clientY: number }) => void
     root.style.setProperty('--theme-r', `${r}px`);
 
     // Use View Transitions API where available — Chrome/Edge/Safari TP.
-    // @ts-expect-error: experimental API not yet in lib.dom
     if (typeof document.startViewTransition === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      // @ts-expect-error: experimental API
       document.startViewTransition(() => setTheme(next));
     } else {
       setTheme(next);
