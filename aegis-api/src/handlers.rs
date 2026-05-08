@@ -20,6 +20,8 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 use tracing::error;
 
 /// Lazy-init shared ExecutorContext — keeps one RpcClient pool alive across requests.
