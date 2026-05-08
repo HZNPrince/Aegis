@@ -8,7 +8,7 @@ use aegis_core::{
     state::AppState,
     types::{AlertRecord, AlertSeverity, GuardRule, PositionSide, WalletRisk},
 };
-use aegis_risk::health::wallet_risk;
+use aegis_risk::{health::wallet_risk, position_aggregation};
 use futures::stream::{FuturesUnordered, StreamExt};
 use sqlx::Row;
 use tracing::{error, info};
@@ -123,23 +123,9 @@ pub async fn evaluate_wallet(
             });
         }
 
-        // Price-driven collateral drop: native amount unchanged but USD value fell >5%
-        let mut total_collateral_native_now = 0;
-        for pos in &risk.positions {
-            for leg in &pos.legs {
-                if leg.side == aegis_core::types::PositionSide::Collateral {
-                    total_collateral_native_now += leg.amount_native;
-                }
-            }
-        }
-        let mut total_collateral_native_last = 0;
-        for pos in &last.positions {
-            for leg in &pos.legs {
-                if leg.side == aegis_core::types::PositionSide::Collateral {
-                    total_collateral_native_last += leg.amount_native;
-                }
-            }
-        }
+        // Price-driven collateral drop: native amount unchanged but USD value fell >2%.
+        let total_collateral_native_now = position_aggregation::total_collateral_native(&risk.positions);
+        let total_collateral_native_last = position_aggregation::total_collateral_native(&last.positions);
         
         if total_collateral_native_now >= total_collateral_native_last && total_collateral_native_last > 0 {
             if last.total_collateral_usd > 0.0 {
@@ -165,15 +151,8 @@ pub async fn evaluate_wallet(
             }
         }
 
-        // Position change detection: new, increased, decreased, closed
-        let mut last_amounts: std::collections::HashMap<(String, String, PositionSide), (f64, String)> = std::collections::HashMap::new();
-        for pos in &last.positions {
-            for leg in &pos.legs {
-                let key = (pos.protocol.clone(), leg.reserve_or_bank.clone(), leg.side.clone());
-                last_amounts.insert(key, (leg.amount_ui, leg.asset_symbol.clone()));
-            }
-        }
-
+        // Position change detection: new, increased, decreased, closed.
+        let last_amounts = position_aggregation::previous_leg_snapshot(&last.positions);
         let mut current_keys = std::collections::HashSet::new();
 
         for pos in &risk.positions {
