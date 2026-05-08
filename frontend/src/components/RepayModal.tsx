@@ -1,5 +1,5 @@
-import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { VersionedTransaction } from '@solana/web3.js';
 import { useEffect, useMemo, useState } from 'react';
 import { useCreateRepayIntent, useSubmitIntent } from '../hooks';
 import type { Position } from '../types';
@@ -70,7 +70,6 @@ export function RepayModal({
   onClose,
 }: Props) {
   const { publicKey, signTransaction } = useWallet();
-  const { connection } = useConnection();
   const createIntent = useCreateRepayIntent();
   const submit = useSubmitIntent();
 
@@ -80,57 +79,13 @@ export function RepayModal({
     'idle',
   );
   const [signature, setSignature] = useState<string | null>(null);
-  const [walletBalance, setWalletBalance] = useState<number | null>(null);
-
-  // Fetch wallet's token balance for the position's mint (across both legacy SPL
-  // Token and Token-2022 ATAs). Drives the "wallet" preview rows.
-  useEffect(() => {
-    let cancelled = false;
-    if (!publicKey || !position.asset_mint) {
-      setWalletBalance(null);
-      return;
-    }
-    (async () => {
-      try {
-        const owner = publicKey;
-        const mint = new PublicKey(position.asset_mint!);
-        const [legacy, t22] = await Promise.all([
-          connection.getParsedTokenAccountsByOwner(owner, { mint }).catch(() => ({ value: [] })),
-          connection
-            .getParsedTokenAccountsByOwner(owner, {
-              mint,
-              programId: new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'),
-            })
-            .catch(() => ({ value: [] })),
-        ]);
-        const all = [...legacy.value, ...t22.value];
-        const total = all.reduce((sum, acct) => {
-          const ui = acct.account.data.parsed?.info?.tokenAmount?.uiAmount;
-          return sum + (typeof ui === 'number' ? ui : 0);
-        }, 0);
-        if (!cancelled) setWalletBalance(total);
-      } catch {
-        if (!cancelled) setWalletBalance(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [connection, publicKey, position.asset_mint]);
 
   useEffect(() => {
-    // Default to the leg's full debt; once the wallet balance lands and is
-    // smaller, clamp so the user starts at a payable amount.
-    const initial = walletBalance != null && walletBalance < position.amount
-      ? walletBalance
-      : position.amount;
-    setAmount(fmtTokenAmount(initial, position.asset_symbol));
-  }, [position.amount, position.asset_symbol, walletBalance]);
+    setAmount(fmtTokenAmount(position.amount, position.asset_symbol));
+  }, [position.amount, position.asset_symbol]);
 
   const amountNum = Number.parseFloat(amount || '0');
-  const insufficientWallet = walletBalance != null && amountNum > walletBalance + 1e-9;
-  const validAmount =
-    Number.isFinite(amountNum) && amountNum > 0 && amountNum <= position.amount && !insufficientWallet;
+  const validAmount = Number.isFinite(amountNum) && amountNum > 0 && amountNum <= position.amount;
 
   // Convert UI amount → native (pre-decimal) units. We don't carry decimals on
   // Position, so derive from amount_native/amount_ui. amount_native is u64 native units.
@@ -154,9 +109,8 @@ export function RepayModal({
     const oldLtv = totalDebtUsd / totalCollateralUsd;
     const oldHealth = Math.max(0, Math.min(100, (1 - oldLtv / liquidationThreshold) * 100));
     const newLegBorrow = Math.max(0, position.amount - amountNum);
-    const newWallet = walletBalance != null ? Math.max(0, walletBalance - amountNum) : null;
-    return { usdRepaid, newDebt, newLtv, newHealth, oldHealth, newLegBorrow, newWallet };
-  }, [amountNum, totalDebtUsd, totalCollateralUsd, liquidationThreshold, position, validAmount, walletBalance]);
+    return { usdRepaid, newDebt, newLtv, newHealth, oldHealth, newLegBorrow };
+  }, [amountNum, totalDebtUsd, totalCollateralUsd, liquidationThreshold, position, validAmount]);
 
   const protoCopy = PROTOCOL_COPY[position.protocol] ?? PROTOCOL_COPY.Kamino;
 
@@ -390,14 +344,23 @@ export function RepayModal({
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
               <Label>Amount to repay ({position.asset_symbol})</Label>
-              <div style={{ display: 'flex', gap: 12, fontFamily: 'var(--mono)', fontSize: 11, color: 'color-mix(in oklab, var(--ink) 55%, transparent)', marginBottom: 8 }}>
-                <span title="Outstanding debt on this leg">
-                  Debt&nbsp;{fmtTokenAmount(position.amount, position.asset_symbol)}
-                </span>
-                <span title="Your wallet balance for this asset">
-                  Wallet&nbsp;{walletBalance != null ? fmtTokenAmount(walletBalance, position.asset_symbol) : '…'}
-                </span>
-              </div>
+              <button
+                type="button"
+                onClick={() => setAmount(fmtTokenAmount(position.amount, position.asset_symbol))}
+                disabled={busy}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontFamily: 'var(--mono)',
+                  fontSize: 11,
+                  color: 'color-mix(in oklab, var(--ink) 55%, transparent)',
+                  cursor: busy ? 'not-allowed' : 'pointer',
+                  padding: 0,
+                  marginBottom: 8,
+                }}
+              >
+                Debt&nbsp;{fmtTokenAmount(position.amount, position.asset_symbol)}
+              </button>
             </div>
             <input
               value={amount}
@@ -440,13 +403,7 @@ export function RepayModal({
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               {QUICK_FILLS.map(({ label, pct }) => {
-                // Quick-fill target is `pct` of the leg's debt, but Max also caps at the
-                // wallet balance so users can't pre-enter an amount they can't pay.
-                const debtTarget = position.amount * pct;
-                const target =
-                  pct === 1 && walletBalance != null
-                    ? Math.min(debtTarget, walletBalance)
-                    : debtTarget;
+                const target = position.amount * pct;
                 // active when the typed amount is within rounding distance of this preset
                 const active = Math.abs(amountNum - target) / Math.max(position.amount, 1e-9) < 0.001;
                 return (
@@ -494,12 +451,6 @@ export function RepayModal({
                   label={`New ${position.asset_symbol} borrow`}
                   value={`${fmtTokenAmount(projection.newLegBorrow, position.asset_symbol)} ${position.asset_symbol}`}
                 />
-                {projection.newWallet != null && (
-                  <Row
-                    label={`New wallet ${position.asset_symbol}`}
-                    value={`${fmtTokenAmount(projection.newWallet, position.asset_symbol)} ${position.asset_symbol}`}
-                  />
-                )}
                 <Row label="New total debt" value={fmtUsd(projection.newDebt)} />
                 <Row label="New LTV" value={`${(projection.newLtv * 100).toFixed(1)}%`} />
                 <Row
@@ -535,22 +486,6 @@ export function RepayModal({
               {protoCopy.tone}
             </div>
 
-            {insufficientWallet && !error && (
-              <div
-                style={{
-                  background: 'color-mix(in oklab, var(--rust) 10%, transparent)',
-                  border: '1px solid color-mix(in oklab, var(--rust) 40%, transparent)',
-                  borderRadius: 10,
-                  padding: '10px 14px',
-                  fontFamily: 'var(--mono)',
-                  fontSize: 11,
-                  color: 'var(--rust)',
-                  marginBottom: 14,
-                }}
-              >
-                Insufficient wallet balance — you have {walletBalance != null ? fmtTokenAmount(walletBalance, position.asset_symbol) : '0'} {position.asset_symbol}.
-              </div>
-            )}
             {error && (
               <div
                 style={{
