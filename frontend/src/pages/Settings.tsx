@@ -32,11 +32,18 @@ export function Settings({ onDisconnect }: Props) {
   const unlink = useUnlinkTelegram();
   const [copied, setCopied] = useState(false);
 
+  // Auto-generate a one-time link code when the user lands on Settings with an
+  // unlinked wallet. Crucial: do NOT put the whole `createCode` mutation in the
+  // deps — it's a fresh object reference every render, which would loop. Only
+  // re-run when the wallet address or linked-state changes, and bail out if
+  // we've already errored once (otherwise a failing endpoint hammers itself).
   useEffect(() => {
-    if (connectedAddr && !DEMO_MODE && !settingsQ.data?.telegram_chat_id && !createCode.data && !createCode.isPending) {
-      createCode.mutate(connectedAddr);
-    }
-  }, [createCode, settingsQ.data?.telegram_chat_id, connectedAddr]);
+    if (!connectedAddr || DEMO_MODE) return;
+    if (settingsQ.data?.telegram_chat_id) return;
+    if (createCode.data || createCode.isPending || createCode.isError) return;
+    createCode.mutate(connectedAddr);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedAddr, settingsQ.data?.telegram_chat_id]);
 
   const isBotConnected = !!settingsQ.data?.telegram_chat_id;
   const code = useMemo(() => createCode.data?.code ?? 'AEG-7K3M-9Q2X', [createCode.data]);
