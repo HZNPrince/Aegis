@@ -29,13 +29,17 @@ export function Dashboard() {
     [alertsQ.data, useLive],
   );
 
-  const totalCollateral = data.positions.filter((p) => p.side === 'Collateral').reduce((s, p) => s + p.value_usd, 0);
-  const totalBorrow = data.positions.filter((p) => p.side === 'Borrow').reduce((s, p) => s + p.value_usd, 0);
+  // Hide dust legs (closed positions with amount=0, or sub-cent residuals) so the feed
+  // reflects only what the user actually owes / holds. Totals and counts use the same set.
+  const materialPositions = data.positions.filter((p) => p.amount > 0 && p.value_usd >= 0.01);
+  const totalCollateral = materialPositions.filter((p) => p.side === 'Collateral').reduce((s, p) => s + p.value_usd, 0);
+  const totalBorrow = materialPositions.filter((p) => p.side === 'Borrow').reduce((s, p) => s + p.value_usd, 0);
   const net = totalCollateral - totalBorrow;
+  const hasPositions = materialPositions.length > 0;
   const watchCount = data.protocol_ltvs.filter((p) => p.ltv > p.liquidation_threshold * 0.75).length;
   const criticalCount = data.protocol_ltvs.filter((p) => p.ltv > p.liquidation_threshold * 0.9).length;
   const avgThreshold = data.protocol_ltvs.reduce((s, p) => s + p.liquidation_threshold * p.total_collateral_usd, 0) / Math.max(totalCollateral, 1);
-  const firstBorrow = data.positions.find((p) => p.side === 'Borrow' && p.reserve_or_bank);
+  const firstBorrow = materialPositions.find((p) => p.side === 'Borrow' && p.reserve_or_bank);
 
   return (
     <main style={{ padding: '64px 28px 72px', maxWidth: 1180, margin: '0 auto' }}>
@@ -46,7 +50,7 @@ export function Dashboard() {
               Overview
             </h1>
             <p style={{ fontFamily: tokens.sans, fontSize: 16, color: 'color-mix(in oklab, var(--ink) 57%, transparent)', lineHeight: 1.5, maxWidth: 620, marginTop: 8 }}>
-              {data.positions.length} position legs across {data.protocol_ltvs.length} protocols. Updated from indexed Solana lending accounts.
+              {materialPositions.length} position legs across {data.protocol_ltvs.length} protocols. Updated from indexed Solana lending accounts.
             </p>
           </div>
           <Chip tone={criticalCount > 0 ? 'critical' : watchCount > 0 ? 'watch' : 'healthy'}>
@@ -71,12 +75,12 @@ export function Dashboard() {
           <Stat label="Net position" value={fmtUsd(net)} delta="+2.4% 7d" tone="pos" />
           <Stat label="Total supplied" value={fmtUsd(totalCollateral)} />
           <Stat label="Total borrowed" value={fmtUsd(totalBorrow)} />
-          <Stat label="Weighted health" value={(data.health_score / 50).toFixed(2)} delta={watchCount ? 'Watch' : 'Healthy'} tone={watchCount ? 'warn' : 'pos'} />
+          <Stat label="Weighted health" value={hasPositions ? (data.health_score / 50).toFixed(2) : '—'} delta={hasPositions ? (watchCount ? 'Watch' : 'Healthy') : 'No positions'} tone={hasPositions ? (watchCount ? 'warn' : 'pos') : 'pos'} />
         </section>
       </Reveal>
 
       <Reveal delay={0.1}>
-        <ProtocolOverview protocols={data.protocol_ltvs} positions={data.positions} />
+        <ProtocolOverview protocols={data.protocol_ltvs} positions={materialPositions} />
       </Reveal>
 
       {watchCount || criticalCount ? (
@@ -119,7 +123,7 @@ export function Dashboard() {
               </div>
             ) : (
               <PositionGroups
-                positions={data.positions}
+                positions={materialPositions}
                 ticker={tickerQ.data}
                 useLive={useLive}
                 onRepay={setRepayPosition}
@@ -131,7 +135,7 @@ export function Dashboard() {
         <aside style={{ display: 'grid', gap: 20 }}>
           <Card pad={24} style={{ textAlign: 'center', background: 'var(--surface-1)' }}>
             <Eyebrow>Health · 30d</Eyebrow>
-            <HealthLine value={(data.health_score / 50).toFixed(2)} />
+            <HealthLine value={hasPositions ? (data.health_score / 50).toFixed(2) : '—'} />
           </Card>
           <RiskSummary alerts={alerts} />
         </aside>

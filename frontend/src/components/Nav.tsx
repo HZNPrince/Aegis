@@ -69,7 +69,9 @@ function NavItem({ to, label, active }: { to: string; label: string; active: boo
 function useTheme(): [string, (e?: { clientX: number; clientY: number }) => void] {
   const [theme, setTheme] = useState<string>(() => {
     if (typeof window === 'undefined') return 'light';
-    return localStorage.getItem('aegis-theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    // Default to light for first-time visitors, even if their OS is dark.
+    // Respect any explicit choice the user has saved.
+    return localStorage.getItem('aegis-theme') || 'light';
   });
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
