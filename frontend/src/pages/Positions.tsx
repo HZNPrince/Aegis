@@ -26,6 +26,7 @@ export function Positions() {
   const [side, setSide] = useState<Position['side'] | 'All'>('All');
 
   const rows = data.positions.filter((p) => {
+    if (p.amount <= 0 || p.value_usd < 0.01) return false;
     if (protocol !== 'All' && p.protocol !== protocol) return false;
     if (side !== 'All' && p.side !== side) return false;
     return true;

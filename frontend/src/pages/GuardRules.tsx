@@ -4,7 +4,7 @@ import { DEMO_MODE } from '../api';
 import { Button, Card, Chip, Eyebrow, ProtocolBadge, Skeleton, tokens } from '../components/sonar';
 import { useDeleteGuardRule, useGuardRules, useUpsertGuardRule } from '../hooks';
 import { MOCK_GUARD_RULES, MOCK_WALLET_FULL } from '../mockData';
-import type { GuardRule, GuardRuleWire } from '../types';
+import type { GuardRule, GuardRuleWire, Protocol, TriggerKind } from '../types';
 import { fmtUsd, guardRuleWireToRule, timeAgo } from '../utils';
 
 export function GuardRules() {
@@ -189,24 +189,88 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
+type TriggerOption = { kind: TriggerKind; label: string; min: number; max: number; step: number; default: number; suffix: string; format: (v: number) => string; toStored: (v: number) => number; fromStored: (v: number) => number };
+
+const TRIGGERS: TriggerOption[] = [
+  { kind: 'HealthBelow', label: 'Health drops below', min: 10, max: 95, step: 1, default: 60, suffix: '', format: (v) => `${v}`, toStored: (v) => v, fromStored: (v) => v },
+  { kind: 'LtvAbove', label: 'LTV rises above', min: 30, max: 95, step: 1, default: 75, suffix: '%', format: (v) => `${v}%`, toStored: (v) => v / 100, fromStored: (v) => Math.round(v * 100) },
+  { kind: 'DebtAboveUsd', label: 'Debt exceeds', min: 100, max: 100000, step: 100, default: 5000, suffix: '$', format: (v) => `$${v.toLocaleString('en-US')}`, toStored: (v) => v, fromStored: (v) => v },
+  { kind: 'HealthDropped', label: 'Health drops by', min: 5, max: 50, step: 1, default: 15, suffix: '%', format: (v) => `${v}%`, toStored: (v) => v / 100, fromStored: (v) => Math.round(v * 100) },
+];
+
+const PROTOCOL_OPTIONS: Array<{ value: Protocol | ''; label: string }> = [
+  { value: '', label: 'All protocols' },
+  { value: 'Kamino', label: 'Kamino' },
+  { value: 'Save', label: 'Save' },
+  { value: 'Marginfi', label: 'Marginfi' },
+];
+
+const SELECT_STYLE: React.CSSProperties = {
+  width: '100%',
+  padding: '10px 12px',
+  borderRadius: 8,
+  border: `1px solid ${tokens.line}`,
+  background: 'var(--surface-2)',
+  color: 'var(--ink)',
+  fontFamily: tokens.sans,
+  fontSize: 14,
+  cursor: 'pointer',
+};
+
 function NewRuleModal({ wallet, onClose, onSave }: { wallet: string; onClose: () => void; onSave: (rule: GuardRule) => void }) {
-  const [health, setHealth] = useState(60);
-  const [amount, setAmount] = useState(300);
+  const [protocol, setProtocol] = useState<Protocol | ''>('');
+  const [triggerIdx, setTriggerIdx] = useState(0);
+  const trig = TRIGGERS[triggerIdx];
+  const [value, setValue] = useState<number>(trig.default);
+  const [dailyCap, setDailyCap] = useState(20);
+  const [cooldownMin, setCooldownMin] = useState(30);
+
+  const onTriggerChange = (idx: number) => {
+    setTriggerIdx(idx);
+    setValue(TRIGGERS[idx].default);
+  };
+
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(15,15,15,0.38)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <Card pad={24} style={{ width: 'min(520px, 100%)', background: 'var(--surface-1)' }} onClick={(e) => e.stopPropagation()}>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(15,15,15,0.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <Card pad={24} style={{ width: 'min(560px, 100%)', background: 'var(--surface-1)' }} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ fontFamily: tokens.sans, fontSize: 22, margin: 0 }}>New guardrail</h2>
-        <p style={{ color: 'color-mix(in oklab, var(--ink) 57%, transparent)', fontFamily: tokens.sans, marginTop: 6 }}>Create a notify-only rule. Autonomous actions can be enabled later.</p>
-        <label style={{ display: 'grid', gap: 8, marginTop: 20, fontFamily: tokens.sans }}>
-          <span>Health threshold</span>
-          <input type="range" min={10} max={90} value={health} onChange={(e) => setHealth(Number(e.target.value))} />
-          <strong style={{ fontFamily: tokens.mono }}>{health}</strong>
+        <p style={{ color: 'color-mix(in oklab, var(--ink) 57%, transparent)', fontFamily: tokens.sans, marginTop: 6 }}>
+          Create a notify-only rule. Autonomous actions can be enabled later.
+        </p>
+
+        <label style={{ display: 'grid', gap: 8, marginTop: 20, fontFamily: tokens.sans, fontSize: 13 }}>
+          <span style={{ color: 'color-mix(in oklab, var(--ink) 70%, transparent)' }}>Scope</span>
+          <select style={SELECT_STYLE} value={protocol} onChange={(e) => setProtocol(e.target.value as Protocol | '')}>
+            {PROTOCOL_OPTIONS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+          </select>
         </label>
-        <label style={{ display: 'grid', gap: 8, marginTop: 16, fontFamily: tokens.sans }}>
-          <span>Daily alert cap</span>
-          <input type="range" min={1} max={50} value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
-          <strong style={{ fontFamily: tokens.mono }}>{amount} alerts</strong>
+
+        <label style={{ display: 'grid', gap: 8, marginTop: 16, fontFamily: tokens.sans, fontSize: 13 }}>
+          <span style={{ color: 'color-mix(in oklab, var(--ink) 70%, transparent)' }}>Trigger</span>
+          <select style={SELECT_STYLE} value={triggerIdx} onChange={(e) => onTriggerChange(Number(e.target.value))}>
+            {TRIGGERS.map((t, i) => <option key={t.kind} value={i}>{t.label}</option>)}
+          </select>
         </label>
+
+        <label style={{ display: 'grid', gap: 8, marginTop: 16, fontFamily: tokens.sans, fontSize: 13 }}>
+          <span style={{ color: 'color-mix(in oklab, var(--ink) 70%, transparent)' }}>Threshold</span>
+          <input type="range" min={trig.min} max={trig.max} step={trig.step} value={value} onChange={(e) => setValue(Number(e.target.value))} />
+          <strong style={{ fontFamily: tokens.mono, fontSize: 16 }}>{trig.format(value)}</strong>
+        </label>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
+          <label style={{ display: 'grid', gap: 8, fontFamily: tokens.sans, fontSize: 13 }}>
+            <span style={{ color: 'color-mix(in oklab, var(--ink) 70%, transparent)' }}>Daily alert cap</span>
+            <input type="range" min={1} max={50} value={dailyCap} onChange={(e) => setDailyCap(Number(e.target.value))} />
+            <strong style={{ fontFamily: tokens.mono }}>{dailyCap} alerts</strong>
+          </label>
+          <label style={{ display: 'grid', gap: 8, fontFamily: tokens.sans, fontSize: 13 }}>
+            <span style={{ color: 'color-mix(in oklab, var(--ink) 70%, transparent)' }}>Cooldown</span>
+            <input type="range" min={5} max={240} step={5} value={cooldownMin} onChange={(e) => setCooldownMin(Number(e.target.value))} />
+            <strong style={{ fontFamily: tokens.mono }}>{cooldownMin >= 60 ? `${(cooldownMin / 60).toFixed(cooldownMin % 60 ? 1 : 0)}h` : `${cooldownMin}m`}</strong>
+          </label>
+        </div>
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
           <Button onClick={onClose}>Cancel</Button>
           <Button
@@ -214,15 +278,15 @@ function NewRuleModal({ wallet, onClose, onSave }: { wallet: string; onClose: ()
             onClick={() => onSave({
               id: `gr${Date.now()}`,
               wallet,
-              protocol: null,
-              trigger_kind: 'HealthBelow',
-              trigger_value: health,
+              protocol: protocol || null,
+              trigger_kind: trig.kind,
+              trigger_value: trig.toStored(value),
               action_kind: 'NotifyOnly',
               action_token: null,
               action_amount_usd: null,
               max_usd_per_action: 0,
-              daily_limit_usd: amount,
-              cooldown_seconds: 1800,
+              daily_limit_usd: dailyCap,
+              cooldown_seconds: cooldownMin * 60,
               is_active: true,
               last_fired_at: null,
             })}
