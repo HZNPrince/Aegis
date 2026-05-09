@@ -13,6 +13,7 @@ import { Alerts } from './pages/Alerts';
 import { Dashboard } from './pages/Dashboard';
 import { GuardRules } from './pages/GuardRules';
 import { Landing } from './pages/Landing';
+import { Pitch } from './pages/Pitch';
 import { ProtocolDetail } from './pages/PositionDetail';
 import { Positions } from './pages/Positions';
 import { Settings } from './pages/Settings';
@@ -46,11 +47,12 @@ function App() {
   };
 
   const isLanding = location.pathname === '/';
+  const isPitch = location.pathname === '/pitch';
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--paper)', color: 'var(--ink)' }}>
-      <Nav connected={connected} onConnect={openConnect} />
-      <div style={{ paddingTop: isLanding ? 0 : 60 }}>
+      {!isPitch && <Nav connected={connected} onConnect={openConnect} />}
+      <div style={{ paddingTop: isLanding || isPitch ? 0 : 60 }}>
         <AnimatePresence mode="wait">
           <motion.div
             key={location.pathname}
@@ -60,6 +62,7 @@ function App() {
           >
             <Routes location={location}>
               <Route path="/" element={<Landing onConnect={openConnect} />} />
+              <Route path="/pitch" element={<Pitch />} />
               <Route path="/dashboard" element={<Protected connected={connected}><Dashboard /></Protected>} />
               <Route path="/positions" element={<Protected connected={connected}><Positions /></Protected>} />
               <Route path="/protocol/:protocolName" element={<Protected connected={connected}><ProtocolDetail /></Protected>} />
