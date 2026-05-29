@@ -5,16 +5,17 @@
 
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, ReactElement } from 'react';
 import { SonarLogo } from '../components/SonarLogo';
 import { tokens } from '../components/sonar';
 
 const COBALT = '#3B5BDB';
 const RUST = '#C44536';
 
-const SLIDES: Array<() => JSX.Element> = [
+const SLIDES: Array<() => ReactElement> = [
   Cover,
   Problem,
+  MarketEvidence,
   WhatAegisIs,
   HowAegisWorks,
   WhatYouGet,
@@ -184,13 +185,7 @@ function Cobalt({ children }: { children: ReactNode }) {
   return <span style={{ color: COBALT }}>{children}</span>;
 }
 
-function Lead({ children }: { children: ReactNode }) {
-  return (
-    <p style={{ fontFamily: tokens.sans, fontWeight: 500, fontSize: 19, lineHeight: 1.55, color: 'color-mix(in oklab, var(--ink) 55%, transparent)', margin: '32px 0 0', maxWidth: 760 }}>
-      {children}
-    </p>
-  );
-}
+
 
 // ─── 1. Cover ────────────────────────────────────────────────────────────
 
@@ -283,7 +278,52 @@ function Cell({ n, label, border, tint }: { n: string; label: string; border?: b
   );
 }
 
-// ─── 3. What Aegis is ────────────────────────────────────────────────────
+// ─── 3. Market Evidence ──────────────────────────────────────────────────
+
+function MarketEvidence() {
+  return (
+    <Shell align="left">
+      <Eyebrow>Market Evidence</Eyebrow>
+      <Headline size={64}>
+        A <Rust>$5B+</Rust> annual problem.
+      </Headline>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 64, marginTop: 56, width: '100%', maxWidth: 1120 }}>
+        <div>
+          <p style={{ fontFamily: tokens.sans, fontWeight: 500, fontSize: 19, lineHeight: 1.6, color: 'var(--ink-2)', margin: 0 }}>
+            Every year, billions of dollars are lost to liquidations on Solana—often due to simple 
+            information asymmetry. Users can't track their risk across fragmented protocols fast enough.
+          </p>
+          <div style={{ marginTop: 40, padding: '24px 30px', background: 'rgba(59,91,219,0.05)', border: `1px solid ${COBALT}` }}>
+            <div style={{ fontFamily: tokens.mono, fontSize: 11, letterSpacing: '0.16em', color: COBALT, textTransform: 'uppercase', marginBottom: 12 }}>
+              The Opportunity
+            </div>
+            <div style={{ fontFamily: tokens.sans, fontWeight: 700, fontSize: 24, letterSpacing: '-0.02em', lineHeight: 1.2 }}>
+              $2B+ in Solana Lending TVL is currently flying without <Cobalt>autonomous guardrails.</Cobalt>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <StatBox n="$5B - $7B" label="Lost to liquidations annually" />
+          <StatBox n="270+" label="Competitors merely watching" />
+          <StatBox n="1" label="Unified execution layer" tint />
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
+function StatBox({ n, label, tint }: { n: string; label: string; tint?: boolean }) {
+  return (
+    <div style={{ padding: '20px 24px', border: '1px solid rgba(26,26,26,0.12)', background: 'var(--paper-2)' }}>
+      <div style={{ fontFamily: tokens.sans, fontWeight: 800, fontSize: 32, letterSpacing: '-0.03em', color: tint ? COBALT : 'var(--ink)' }}>{n}</div>
+      <div style={{ fontFamily: tokens.mono, fontSize: 10, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'rgba(26,26,26,0.5)', marginTop: 4 }}>{label}</div>
+    </div>
+  );
+}
+
+// ─── 4. What Aegis is ────────────────────────────────────────────────────
 
 function WhatAegisIs() {
   return (
